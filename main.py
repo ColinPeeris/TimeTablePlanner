@@ -1,6 +1,7 @@
 import copy
 import math
 import pandas as pd
+import numpy as np
 from typing import List, Dict, Tuple, Optional
 from random import shuffle
 
@@ -36,8 +37,18 @@ class Person:
         """
         self._name = name
         self._capacity = 0
-        self._availability = []
+        self._availability = []  # @todo: remove
         self._days_assigned = []
+        self._availability_by_hour = {}
+        # -1: Not in school
+        # 0: available
+        # 1: on duty
+
+    @staticmethod
+    def time_to_index(time: str) -> int:
+        hours, minutes = divmod(int(time), 100)
+        # 9 AM is the reference time, so we subtract 9 * 60 (9 AM = 540 minutes)
+        return (hours * 60 + minutes - 540) // 30
 
     def get_name(self) -> str:
         """
@@ -48,25 +59,51 @@ class Person:
         """
         return self._name
 
-    def get_availability(self) -> List[str]:
+    def get_availability(self, day) -> List[int]:
         """
         Returns the list of days the person is available to take on duties.
 
         Returns:
             list: A list of days the person is available for duty.
         """
+        return self._availability_by_hour[day]
         return self._availability
 
-    def set_availability(self, day: str) -> None:
+    def get_work_capacity_ratio(self):
+        total_filled_slots = 0
+        total_free_slots = 0
+        for day in self._availability_by_hour:
+            total_filled_slots = total_filled_slots + self._availability_by_hour[day].count(1)
+            total_free_slots = total_free_slots + self._availability_by_hour[day].count(0)
+        work_to_capacity_ratio = float(total_filled_slots) / float(total_filled_slots + total_free_slots)
+        return work_to_capacity_ratio
+
+    '''def set_availability(self, day: str) -> None:
         """
         Adds a day to the person's availability list.
 
         Args:
             day (str): The day the person becomes available for duty.
         """
-        self._availability.append(day)
+        self._availability.append(day)'''
 
-    def check_availability(self, day: str) -> bool:
+    def set_availability(self, day: str, start_time: str, end_time: str, status: str) -> None:
+        """
+        Adds a day to the person's availability list.
+
+        Args:
+            day (str): The day the person becomes available for duty.
+        """
+        if day not in self._availability_by_hour:
+            self._availability_by_hour[day] = [-1] * 18
+        start_index = self.time_to_index(start_time)
+        end_index = self.time_to_index(end_time)
+
+        # Update the schedule from start_index to end_index with the given status
+        for i in range(start_index, end_index):
+            self._availability_by_hour[day][i] = status
+
+    def check_availability_by_day(self, day: str) -> bool:  # @todo: remove
         """
         Checks if the person is available on a specific day.
 
@@ -77,6 +114,26 @@ class Person:
             bool: True if the person is available on the specified day, False otherwise.
         """
         return True if day in self._availability else False
+
+    def check_availability(self, day: str, start_time: str, end_time: str) -> bool:
+        """
+        Checks if the person is available between start_time and end_time.
+
+        Args:
+            start_time: The start time in 'HHMM' format (24-hour).
+            end_time: The end time in 'HHMM' format (24-hour).
+
+        Returns:
+            bool: True if the person is available for the entire time range, False otherwise.
+        """
+        start_index = self.time_to_index(start_time)
+        end_index = self.time_to_index(end_time)
+        if day not in self._availability_by_hour:
+            return False
+        if (np.asarray(self._availability_by_hour[day][start_index:end_index]) == 0).all():
+            return True
+        else:
+            return False
 
     def add_duty(self, day: str) -> None:
         """
@@ -147,7 +204,7 @@ class Queue:
             queue.append(person)
         return queue
 
-    def add_to_queue(self, person: Person) -> None:
+    def add_to_queue(self, staff_member: str, day: str, start_time: str, end_time: str, status: int) -> None:
         """
         Adds a `Person` object to the queue, updating their availability if they are already in the queue.
 
@@ -157,17 +214,17 @@ class Queue:
         # Iterate through the queue to find if the person already exists in the queue
         for index, entry in enumerate(self._queue):
             # Check if the current entry in the queue has the same name as the given person
-            if entry.get_name() == person.get_name():
+            if entry.get_name() == staff_member:
                 # If the person already exists, update their availability in the queue
-                for day_available in person.get_availability():
-                    # Add each available day of the person to the existing entry in the queue
-                    self._queue[index].set_availability(day=day_available)
-                # Once the availability is updated, exit the method
+                self._queue[index].set_availability(day=day, start_time=start_time, end_time=end_time, status=status)
                 return
         # If the person was not found in the queue, add them to the queue
-        self._queue.append(person)
+        person_to_add = Person(staff_member)
+        person_to_add.set_availability(day=day, start_time=start_time, end_time=end_time, status=status)
+        self._queue.append(person_to_add)
 
-    def select_available_person(self, day: str) -> Optional[Person]:
+    # @todo: remove
+    def select_available_person_by_day(self, day: str) -> Optional[Person]:
         """
         Selects an available person from the queue for a specific day. The person is removed from the queue
         once assigned to a duty and is added back to the queue with the duty recorded.
@@ -196,6 +253,19 @@ class Queue:
             print('Nobody available')'''
         return None
 
+    def select_available_person(self, day, start_time, end_time) -> Optional[Person]:
+        selected_index = None
+        for idx, person in enumerate(self._queue):
+            if person.check_availability(day=day, start_time=start_time, end_time=end_time):
+                selected_index = idx
+                break
+        if selected_index is not None:
+            self._queue[selected_index].set_availability(day=day, start_time=start_time, end_time=end_time, status=1)
+            return self._queue[selected_index]
+
+        # no one from the queue is available
+        return None
+
     def get_list(self) -> List[Person]:
         """
         Returns the current list of people in the queue.
@@ -222,10 +292,7 @@ class Queue:
         Returns:
             float: The ratio of the number of duties taken to the person's availability.
         """
-        capacity = len(person.get_availability())
-        work_load = person.get_number_of_duties_taken()
-        assert capacity >= work_load
-        return float(work_load) / float(capacity)
+        return person.get_work_capacity_ratio()
 
     def find_std_deviation(self) -> float:
         """
@@ -248,6 +315,62 @@ class Queue:
         std_deviation = sum_of_x / len(self._queue)
         std_deviation = math.sqrt(std_deviation)
         return std_deviation
+
+
+class DutyRoster:
+    def __init__(self):
+        self._duty_roster = {}
+
+    @staticmethod
+    def calculate_duration(start_time: str, end_time: str) -> float:
+        if isinstance(start_time, int):
+            start_time = str(start_time)
+        if isinstance(end_time, int):
+            end_time = str(end_time)
+        # Ensure both times have 4 digits by padding with leading zeros if necessary
+        start_time = start_time.zfill(4)
+        end_time = end_time.zfill(4)
+
+        # Extract hours and minutes from start_time and end_time
+        start_hour = int(start_time[:2])
+        start_minute = int(start_time[2:])
+
+        end_hour = int(end_time[:2])
+        end_minute = int(end_time[2:])
+
+        # Convert both start_time and end_time to minutes from midnight
+        start_total_minutes = start_hour * 60 + start_minute
+        end_total_minutes = end_hour * 60 + end_minute
+
+        # If the end time is earlier than the start time, it means we passed midnight
+        if end_total_minutes < start_total_minutes:
+            end_total_minutes += 24 * 60  # Add 24 hours in minutes (1440 minutes)
+
+        # Calculate the duration in minutes
+        duration_minutes = end_total_minutes - start_total_minutes
+
+        # Convert the duration to hours
+        return duration_minutes / 60
+
+    def add_day(self, day):
+        if day not in self._duty_roster:
+            self._duty_roster[day] = {}
+
+    def add_duty(self, activity, session, start_time, end_time, min_requirement, ideal_case):
+        for day in self._duty_roster:
+            self._duty_roster[day][activity] = {
+                'session': session,
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': self.calculate_duration(start_time=start_time, end_time=end_time),
+                'min_requirement': min_requirement,
+                'ideal_case': ideal_case,
+                'assignees': []
+            }
+
+    def get_duty_roster(self):
+        # @todo: make this better
+        return self._duty_roster
 
 
 class Scheduler:
@@ -283,62 +406,85 @@ class Scheduler:
               standard deviation of duty assignments.
             - Outputs the best result after 100 iterations to an Excel file.
         """
-        teachers, temps = self._get_data_from_excel('AvailabilityList.xlsx')
-        slots_to_fill = teachers.keys()
+
+        teachers_am_list, teachers_pm_list, temps_am_list, temps_pm_list = self._get_staff_availability(
+            'AvailabilityList.xlsx')
+
+        self._duty_roster = DutyRoster()
+
+        for slot in teachers_am_list:
+            day = f"{slot[0]}_{str(slot[1]).replace(' ', '_')}"
+            self._duty_roster.add_day(day)
+
+        self._get_duties_list_from_excel('DutiesBreakdown.xlsx')
 
         teacher_list = Queue()
         temp_list = Queue()
-        for slot in slots_to_fill:
-            # make sure the slot exists in the teachers queue and the temp queue.
-            assert slot in teachers
-            assert slot in temps
-            for teacher in teachers[slot]:
-                person_to_add = Person(teacher)
-                person_to_add.set_availability(slot)
-                teacher_list.add_to_queue(person=person_to_add)
-            for temp in temps[slot]:
-                person_to_add = Person(temp)
-                person_to_add.set_availability(slot)
-                temp_list.add_to_queue(person=person_to_add)
 
+        # Process all the slots
+        self._add_to_queue_for_slot(teacher_list, teachers_am_list, '0900', '1400')
+        self._add_to_queue_for_slot(teacher_list, teachers_pm_list, '1400', '1800')
+        self._add_to_queue_for_slot(temp_list, temps_am_list, '0900', '1400')
+        self._add_to_queue_for_slot(temp_list, temps_pm_list, '1400', '1800')
+
+        # iterate 100 times until the distribution is most fair...
         min_std_deviation = 99999
         success_count = 0
         finalized_teacher_list = None
         finalized_temp_list = None
         final_duty_list = None
+        final_roster = None
 
         for i in range(0, 100):
             # make copies of teacher and temp queues
             _teacher_list = copy.deepcopy(teacher_list)
             _temp_list = copy.deepcopy(temp_list)
 
-            # randomly shuffle teacher and temp lists
-            _teacher_list.shuffle()
-            _temp_list.shuffle()
+            duty_roster = copy.deepcopy(self._duty_roster.get_duty_roster())
+            for day in duty_roster:
+                # shuffle queue at the start of the day
+                _teacher_list.shuffle()
+                _temp_list.shuffle()
+                for duty in duty_roster[day]:
+                    print(f'setting duties for {duty}...')
+                    #for i in range(0, int(duty_roster[day][duty]['ideal_case'])):
+                    for i in range(0, int(duty_roster[day][duty]['min_requirement'])):
+                        selected_teacher = None
+                        selected_temp = None
+                        selected_teacher = _teacher_list.select_available_person(
+                            day=day,
+                            start_time=duty_roster[day][duty]['start_time'],
+                            end_time=duty_roster[day][duty]['end_time']
+                        )
 
-            # create a duty list
-            duty_list = {}
-            try:
-                for slot in slots_to_fill:
-                    assert slot in teachers
-                    assert slot in temps
-                    duty_list[slot] = self._create_duties_per_slot(available_teachers=_teacher_list,
-                                                                   available_temps=_temp_list,
-                                                                   slot_to_fill=slot)
-            except AssertionError as e:
-                print(f'Assertion failed during duty creation for slot: {slot}. Error: {str(e)}')
-                continue  # Continue to the next slot if an assertion fails
-            except Exception as e:
-                print(f'An error occurred while creating duties for slot: {slot}. Error: {str(e)}')
-                continue  # Continue to the next slot if a general error occurs
+                        # If no teacher is found, try to assign a temp
+                        if selected_teacher is not None:
+                            duty_roster[day][duty]['assignees'].append(selected_teacher)
+                            print(f'Selected {selected_teacher.get_name()} for {day}')
+                        else:
+                            selected_temp = _temp_list.select_available_person(
+                                day=day,
+                                start_time=duty_roster[day][duty]['start_time'],
+                                end_time=duty_roster[day][duty]['end_time']
+                            )
+                            if selected_temp is not None:
+                                duty_roster[day][duty]['assignees'].append(selected_temp)
+                                print(f'Selected {selected_temp.get_name()} for {day}')
+
+                        # If neither teacher nor temp is found and it's not the last iteration, raise an error
+                        if (selected_teacher is None) and (selected_temp is None) and (
+                                i + 1 < int(duty_roster[day][duty]['min_requirement'])):
+                            assert False, f"Error: Could not find enough staff for {day} " \
+                                          f"from {duty_roster[day][duty]['start_time']} to {duty_roster[day][duty]['end_time']}. " \
+                                          f"Minimum requirement not met."
 
             sum_of_std_deviation = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
             if sum_of_std_deviation < min_std_deviation:
                 min_std_deviation = sum_of_std_deviation
                 finalized_teacher_list = copy.deepcopy(_teacher_list)
                 finalized_temp_list = copy.deepcopy(_temp_list)
-                assert duty_list is not None
-                final_duty_list = duty_list
+                assert duty_roster is not None
+                final_roster = duty_roster
 
             success_count += 1
 
@@ -347,223 +493,107 @@ class Scheduler:
         if (finalized_temp_list is not None) and (finalized_teacher_list is not None):
             print('------------------------------------')
             print('Print Best Results:')
-            for slot in slots_to_fill:
-                print(slot)
-                for person in final_duty_list[slot]:
-                    print(person.get_name())
-                print('\n')
             for person in finalized_temp_list.get_list():
-                print(f'Person: {person.get_name()}, Number Of Duties: {person.get_number_of_duties_taken()}')
+                print(f'Person: {person.get_name()}, Work-To-Capacity: {person.get_work_capacity_ratio()}')
             for person in finalized_teacher_list.get_list():
-                print(f'Person: {person.get_name()}, Number Of Duties: {person.get_number_of_duties_taken()}')
-            self._write_results_to_excel(teacher_list=finalized_teacher_list,
-                                         temp_list=finalized_temp_list,
-                                         duty_list=final_duty_list,
-                                         slots_to_fill=slots_to_fill)
+                print(f'Person: {person.get_name()}, Work-To-Capacity: {person.get_work_capacity_ratio()}')
+            self._write_roster_to_excel(final_roster)
 
     @staticmethod
-    def _write_results_to_excel(teacher_list: Queue, temp_list: Queue, duty_list: dict, slots_to_fill: List) -> None:
-        """
-        Writes the finalized duty assignments and work distribution to an Excel file.
+    def _add_to_queue_for_slot(queue, slot_list, start_time, end_time):
+        for slot in slot_list:
+            # Create the day string
+            day = f"{slot[0]}_{str(slot[1]).replace(' ', '_')}"
 
-        Args:
-            teacher_list (Queue): The final list of teachers assigned to duties.
-            temp_list (Queue): The final list of temporary staff (temps) assigned to duties.
-            duty_list (dict): A dictionary mapping time slots to assigned duties.
-            slots_to_fill (list): A list of time slots that need to be filled with duties.
+            # Clean the staff members list by removing NaNs and stripping whitespace
+            staff_members = [staff_member.strip() for staff_member in slot[2:] if pd.notna(staff_member)]
 
-        Saves two sheets in the 'output.xlsx' Excel file:
-            - 'duty_list': Contains the names of teachers assigned to each slot.
-            - 'duties_distribution': Lists the number of duties taken by each person.
-        """
-        slots = []
-        teacher_1 = []
-        teacher_2 = []
-        teacher_3 = []
-        teacher_4 = []
-        teacher_5 = []
-        teacher_6 = []
-        for slot in slots_to_fill:
-            slots.append(slot)
-            assert len(duty_list[slot]) > 4
-            teacher_1.append(duty_list[slot][0].get_name())
-            teacher_2.append(duty_list[slot][1].get_name())
-            teacher_3.append(duty_list[slot][2].get_name())
-            teacher_4.append(duty_list[slot][3].get_name())
-            teacher_5.append(duty_list[slot][4].get_name())
-            if len(duty_list[slot]) > 5:
-                teacher_6.append(duty_list[slot][5].get_name())
-            else:
-                teacher_6.append('NA')
-        duty_list_data = pd.DataFrame(
-            {'Time Slot': slots,
-             'Teacher 1': teacher_1,
-             'Teacher 2': teacher_2,
-             'Teacher 3': teacher_3,
-             'Teacher 4': teacher_4,
-             'Teacher 5': teacher_5,
-             'Teacher 6': teacher_6,
-             }
-        )
-
-        people = []
-        number_of_duties_taken = []
-        for person in temp_list.get_list():
-            people.append(person.get_name())
-            number_of_duties_taken.append(person.get_number_of_duties_taken())
-        for person in teacher_list.get_list():
-            people.append(person.get_name())
-            number_of_duties_taken.append(person.get_number_of_duties_taken())
-        work_distribution = pd.DataFrame(
-            {'Person': people,
-             'Number of Duties Taken': number_of_duties_taken,
-             }
-        )
-
-        writer = pd.ExcelWriter('output.xlsx', engine='xlsxwriter')
-        frames = {'duty_list': duty_list_data,
-                  'duties_distribution': work_distribution}
-        for sheet in frames.keys():
-            frame = frames[sheet]
-            frame.to_excel(writer, sheet_name=sheet)
-        writer.save()
+            # Add each staff member to the queue
+            for staff_member in staff_members:
+                queue.add_to_queue(staff_member=staff_member, day=day, start_time=start_time, end_time=end_time,
+                                   status=0)
 
     @staticmethod
-    def _get_by_am_pm(df, am: bool) -> Dict:
-        """
-        Extracts availability data from a DataFrame for either AM or PM slots.
+    def _write_roster_to_excel(roster: dict) -> None:
+        duties = []
+        teachers_by_day = {}  # Dictionary to store teacher lists by day
 
-        Args:
-            df (pandas.DataFrame): The DataFrame containing the availability data.
-            am (bool): If True, extracts data for AM slots. If False, extracts data for PM slots.
+        for day in roster:
+            # Initialize a list of duties for each day in the dictionary
+            teachers_by_day[day] = []
 
-        Returns:
-            dict: A dictionary with the day tags (e.g., 'Monday_AM', 'Tuesday_PM') as keys and
-                  lists of names of available people as values.
-        """
-        output = {}
-        data = df.to_numpy()
-        rows, cols = data.shape
-        for row in range(0, rows):
-            if am:
-                # create the am tag
-                day_tag = data[row][0] + '_' + str(data[row][1]).split(' ')[0] + '_AM'
-            else:
-                # create the pm tag
-                day_tag = data[row][0] + '_' + str(data[row][1]).split(' ')[0] + '_PM'
-            names = []
-            for col in range(2, cols):
-                if str(data[row][col]) != 'nan':
-                    name = data[row][col]
-                    name = name.replace(" ", "")
-                    names.append(name)
-            if len(names) > 0:
-                output[day_tag] = names
-        return output
+            for duty in roster[day]:
+                duties.append(duty)  # Add the duty to the duties list
 
-    def _get_data_by_sheet(self, df_am, df_pm) -> Dict:
-        """
-        Combines the AM and PM availability data for teachers and temps from their respective DataFrames.
+                # Extract assignees for the current duty (duty['assignees'])
+                assignees = roster[day][duty]['assignees']
 
-        Args:
-            df_am (pandas.DataFrame): DataFrame containing AM availability for teachers or temps.
-            df_pm (pandas.DataFrame): DataFrame containing PM availability for teachers or temps.
+                # Create a list of teachers for the current duty
+                teachers_for_duty = []
 
-        Returns:
-            dict: A dictionary combining the availability data for both AM and PM time slots.
-        """
-        return {**self._get_by_am_pm(df_am, am=True), **self._get_by_am_pm(df_pm, am=False)}
+                # Loop through assignees and add their names to the current duty's teacher list
+                for idx, assignee in enumerate(assignees):
+                    teachers_for_duty.append(assignee.get_name())
 
-    def _get_data_from_excel(self, file_name) -> Tuple[Dict, Dict]:
-        """
-        Reads availability data for teachers and temps from the given Excel file.
+                # If there are fewer assignees than the max, append 'NA' or placeholder
+                for idx in range(len(assignees), 6):  # Assuming max 6 assignees per duty
+                    teachers_for_duty.append('NA')  # Placeholder for missing teachers
 
-        Args:
-            file_name (str): The name of the Excel file to read data from.
+                # Add the current duty's teachers to the list for that day
+                teachers_by_day[day].append((duty, teachers_for_duty))  # Storing duty name along with teachers
 
-        Returns:
-            tuple: A tuple containing two dictionaries:
-                   - The first dictionary contains the availability data for teachers.
-                   - The second dictionary contains the availability data for temps.
-        """
+        # Print the structured teachers_by_day dictionary for debugging
+        print(teachers_by_day)
+
+        # Prepare data for Excel with duty as the second column
+        data_for_excel = []
+
+        # Loop through each day in the teachers_by_day dictionary
+        for day, duties in teachers_by_day.items():
+            # For each duty on the given day, prepend the day and then duty to the list of teachers
+            for duty, duty_teachers in duties:
+                # Create a row: first the day, then the duty, followed by the teachers
+                row = [day, duty] + duty_teachers  # Add day, duty, and teacher names
+                data_for_excel.append(row)
+
+        # Now, create a DataFrame from the list of rows
+        columns = ['Day', 'Duty', 'Teacher 1', 'Teacher 2', 'Teacher 3', 'Teacher 4', 'Teacher 5', 'Teacher 6']
+
+        df = pd.DataFrame(data_for_excel, columns=columns)
+
+        # Write the DataFrame to an Excel file
+        file_name = 'teacher_schedule_with_duties.xlsx'
+        df.to_excel(file_name, index=False)
+
+        print(f"Data has been written to {file_name}")
+
+    @staticmethod
+    def _get_staff_availability(file_name) -> Tuple[List, List, List, List]:
         df_teachers_am = pd.read_excel(file_name, sheet_name='Teachers_AM')
         df_teachers_pm = pd.read_excel(file_name, sheet_name='Teachers_PM')
         df_temps_am = pd.read_excel(file_name, sheet_name='Temps_AM')
         df_temps_pm = pd.read_excel(file_name, sheet_name='Temps_PM')
-        return self._get_data_by_sheet(df_am=df_teachers_am, df_pm=df_teachers_pm), \
-            self._get_data_by_sheet(df_am=df_temps_am, df_pm=df_temps_pm)
 
-    @staticmethod
-    def _create_duties_per_slot(available_teachers: Queue, available_temps: Queue, slot_to_fill: str) -> List:
-        """
-        Creates a list of assigned duties for a specific time slot (AM or PM).
+        teachers_am_list = df_teachers_am.values.tolist()
+        teachers_pm_list = df_teachers_pm.values.tolist()
+        temps_am_list = df_temps_am.values.tolist()
+        temps_pm_list = df_temps_pm.values.tolist()
 
-        The method assigns teachers and temps to different roles (PreN, N, K for AM and N, K for PM) based
-        on their availability. It ensures that there are sufficient available staff for each role, and attempts
-        to balance the workload.
+        return teachers_am_list, teachers_pm_list, temps_am_list, temps_pm_list
 
-        Args:
-            available_teachers (Queue): A queue of teachers available for duty.
-            available_temps (Queue): A queue of temporary staff (temps) available for duty.
-            slot_to_fill (str): The time slot (e.g., 'Monday_AM', 'Tuesday_PM') for which duties are being created.
-
-        Returns:
-            list: A list of Person objects representing the assigned teachers and temps for the slot.
-
-        Raises:
-            AssertionError: If no suitable teacher or temp is available for a required role.
-        """
-        """
-        What is needed:
-        Morning:
-        - PreN: 2
-        - N: 2
-        - K: 2
-        Afternoon:
-        - N: 2-3
-        - K: 2
-        """
-        duty_list = []
-
-        N_Person1 = available_teachers.select_available_person(day=slot_to_fill)
-        assert N_Person1 is not None, f'No teacher available for N in {slot_to_fill}'
-        N_Person2 = available_temps.select_available_person(day=slot_to_fill)
-        if N_Person2 is None:
-            N_Person2 = available_teachers.select_available_person(day=slot_to_fill)
-            assert N_Person2 is not None, f'Nobody teacher/temp available for N in {slot_to_fill}'
-        duty_list.append(N_Person1)
-        duty_list.append(N_Person2)
-
-        K_Person1 = available_teachers.select_available_person(day=slot_to_fill)
-        assert K_Person1 is not None, f'No teacher available for K in {slot_to_fill}'
-        K_Person2 = available_temps.select_available_person(day=slot_to_fill)
-        if K_Person2 is None:
-            K_Person2 = available_teachers.select_available_person(day=slot_to_fill)
-            assert K_Person2 is not None, f'Nobody teacher/temp available for K in {slot_to_fill}'
-        duty_list.append(K_Person1)
-        duty_list.append(K_Person2)
-
-        if 'AM' in slot_to_fill:
-            PreN_Person1 = available_teachers.select_available_person(day=slot_to_fill)
-            assert PreN_Person1 is not None, f'No teacher available for PreN in {slot_to_fill}'
-            PreN_Person2 = available_temps.select_available_person(day=slot_to_fill)
-            if PreN_Person2 is None:
-                PreN_Person2 = available_teachers.select_available_person(day=slot_to_fill)
-                assert PreN_Person2 is not None, f'Nobody teacher/temp available for PreN in {slot_to_fill}'
-            duty_list.append(PreN_Person1)
-            duty_list.append(PreN_Person2)
-        elif 'PM' in slot_to_fill:
-            N_Person3 = available_temps.select_available_person(day=slot_to_fill)
-            if N_Person3 is None:
-                N_Person3 = available_teachers.select_available_person(day=slot_to_fill)
-            if N_Person3 is None:
-                print(f'Warning: No 3rd teacher / temp available for {slot_to_fill}')
-            else:
-                duty_list.append(N_Person3)
-        else:
-            assert True, f'Invalid entry {slot_to_fill}'
-
-        return duty_list
+    def _get_duties_list_from_excel(self, file_name):
+        dataframe = pd.read_excel(file_name)
+        for activity, session, start_time, end_time, min_requirement, ideal_case in \
+                zip(dataframe['Activity'], dataframe['Session'], dataframe['Start Time'], dataframe['End Time'], \
+                dataframe['Minimum Requirement'], dataframe['Ideal Case']):
+            self._duty_roster.add_duty(
+                activity=activity,
+                session=session,
+                start_time=start_time,
+                end_time=end_time,
+                min_requirement=min_requirement,
+                ideal_case=ideal_case
+            )
 
 
 # Press the green button in the gutter to run the script.
