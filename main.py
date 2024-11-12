@@ -534,30 +534,13 @@ class Scheduler:
                 _temp_list.shuffle()
 
                 for duty_name, duty_info in duty_roster[day].items():
-                    # Now 'duty_info' contains the dictionary of the current duty's details
-                    print(f"Assigning duties for: {duty_name}")
-                    print(f"Duty details: {duty_info}")
+                    self._assign_staff_to_duty(day, duty_info, _teacher_list, _temp_list, duty_info['min_requirement'], ideal_case=False)
 
-                    for _ in range(int(duty_info['min_requirement'])):
-                        selected_teacher = _teacher_list.select_available_person(
-                            day, duty_info['start_time'], duty_info['end_time']
-                        )
-                        selected_temp = None
+                for duty_name, duty_info in duty_roster[day].items():
+                    if duty_info['min_requirement'] < duty_info['ideal_case']:
+                        self._assign_staff_to_duty(day, duty_info, _teacher_list, _temp_list, duty_info['ideal_case'] - duty_info['min_requirement'],
+                                                   ideal_case=True)
 
-                        # Assign teacher if available, else assign temp
-                        if selected_teacher is not None:
-                            duty_info['assignees'].append(selected_teacher)
-                        else:
-                            selected_temp = _temp_list.select_available_person(
-                                day, duty_info['start_time'], duty_info['end_time']
-                            )
-                            if selected_temp is not None:
-                                duty_info['assignees'].append(selected_temp)
-
-                        # If neither a teacher nor a temp is found, raise an error
-                        if selected_teacher is None and selected_temp is None:
-                            raise ValueError(
-                                f"Unable to find sufficient staff for {day} from {duty_info['start_time']} to {duty_info['end_time']}")
 
             # Evaluate the quality of this schedule by checking the standard deviation
             sum_of_std_deviation = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
@@ -570,6 +553,47 @@ class Scheduler:
                 final_roster = duty_roster
 
         return final_roster, finalized_teacher_list, finalized_temp_list
+
+    def _assign_staff_to_duty(self, day, duty_info, teacher_list, temp_list, required_count, ideal_case: bool):
+        """
+        Assigns staff (teachers or temps) to a duty until the required count is met.
+
+        Args:
+            day(str): Which day we're on
+            duty_info (dict): The duty information containing start_time, end_time, and assignees.
+            teacher_list (Queue): The list of available teachers.
+            temp_list (Queue): The list of available temps.
+            required_count (int): The number of staff required to be assigned to the duty.
+            ideal_case(bool): Boolean of whether assignment is for ideal case or minimum requirement
+
+        Returns:
+            None: Staff members are assigned in place to the duty.
+        """
+        for _ in range(required_count):
+            selected_teacher = teacher_list.select_available_person(
+                day, duty_info['start_time'], duty_info['end_time']
+            )
+            selected_temp = None
+
+            # Assign teacher if available, else assign temp
+            if selected_teacher:
+                duty_info['assignees'].append(selected_teacher)
+            else:
+                selected_temp = temp_list.select_available_person(
+                    day, duty_info['start_time'], duty_info['end_time']
+                )
+                if selected_temp:
+                    duty_info['assignees'].append(selected_temp)
+
+            # Skip following check if we're populating for the ideal case
+            if ideal_case:
+                return
+
+            # If neither a teacher nor a temp is found, raise an error
+            if not selected_teacher and not selected_temp:
+                raise ValueError(
+                    f"Unable to find sufficient staff for {duty_info['start_time']} to {duty_info['end_time']}"
+                )
 
     @staticmethod
     def _write_roster_to_excel(roster: dict, finalized_teacher_list: Queue, finalized_temp_list: Queue) -> None:
