@@ -8,46 +8,53 @@ from random import shuffle
 
 class Person:
     """
-    A class representing a person (e.g., a teacher or temp) involved in duty scheduling.
+    A class representing a person (e.g., a teacher or temp) who can be assigned duties based on availability.
+
+    This class manages the availability of a person for scheduled duties and keeps track of the days they have been assigned.
 
     Attributes:
         _name (str): The name of the person.
-        _capacity (int): The number of days the person is available to work. (Unused in this code but can be extended.)
-        _availability (list): A list of days the person is available for duties.
+        _availability_by_hour (dict): A dictionary mapping days to lists representing the person's availability
+                                      for each 30-minute time slot (from 9:00 AM onward).
+                                      Each list contains values indicating availability:
+                                        - -1: Not in school
+                                        - 0: Available
+                                        - 1: On duty
         _days_assigned (list): A list of days the person has been assigned duties.
 
     Methods:
-        __init__: Initializes a new Person object with the given name.
+        __init__: Initializes a new Person object with the given name and sets up availability and duty tracking.
         get_name: Returns the name of the person.
-        get_availability: Returns the list of days the person is available.
-        set_availability: Adds a day to the person's availability.
-        check_availability: Checks if the person is available on a given day.
-        add_duty: Adds a duty assignment for the person on a specified day.
-        get_duty_list: Returns the list of days the person has been assigned duties.
-        get_number_of_duties_taken: Returns the total number of duties assigned to the person.
+        get_availability: Returns the availability of the person for a specific day.
+        get_work_capacity_ratio: Calculates and returns the ratio of duties assigned to the total availability.
+        set_availability: Sets the availability status (0 for available, 1 for on duty) for a given time range on a specified day.
+        check_availability: Checks if the person is available for a specific time range on a given day.
+        add_duty: Adds a day to the list of days the person has been assigned a duty.
     """
 
-    def __init__(self, name):
+    def __init__(self, name: str):
         """
-        Initializes a Person object with a given name and sets initial values for capacity,
-        availability, and assigned days.
+        Initializes a Person object with the given name and sets up initial availability tracking.
 
         Args:
             name (str): The name of the person.
         """
         self._name = name
-        self._capacity = 0
-        self._availability = []  # @todo: remove
-        self._days_assigned = []
         self._availability_by_hour = {}
-        # -1: Not in school
-        # 0: available
-        # 1: on duty
+        self._days_assigned = []
 
     @staticmethod
     def time_to_index(time: str) -> int:
+        """
+        Converts a time string (HHMM) to an index representing the corresponding 30-minute slot from 9:00 AM.
+
+        Args:
+            time (str): A time string in 'HHMM' format (24-hour).
+
+        Returns:
+            int: An index representing the 30-minute slot, where 9:00 AM corresponds to index 0.
+        """
         hours, minutes = divmod(int(time), 100)
-        # 9 AM is the reference time, so we subtract 9 * 60 (9 AM = 540 minutes)
         return (hours * 60 + minutes - 540) // 30
 
     def get_name(self) -> str:
@@ -59,43 +66,54 @@ class Person:
         """
         return self._name
 
-    def get_availability(self, day) -> List[int]:
+    def get_availability(self, day: str) -> List[int]:
         """
-        Returns the list of days the person is available to take on duties.
+        Returns the availability of the person for a specific day.
+
+        Args:
+            day (str): The day to check availability.
 
         Returns:
-            list: A list of days the person is available for duty.
+            list: A list of 18 integers representing the availability for the day,
+                  where each integer corresponds to a 30-minute time slot (from 9:00 AM onward).
+                  Values are:
+                    - -1: Not in school
+                    - 0: Available
+                    - 1: On duty
         """
-        return self._availability_by_hour[day]
-        return self._availability
+        return self._availability_by_hour.get(day, [])
 
-    def get_work_capacity_ratio(self):
+    def get_work_capacity_ratio(self) -> float:
+        """
+        Calculates the ratio of duties assigned to the total availability of the person.
+
+        The ratio is the number of filled duty slots divided by the total number of available slots across all days.
+
+        Returns:
+            float: The work-to-capacity ratio, indicating how much of the person's availability has been utilized.
+        """
         total_filled_slots = 0
         total_free_slots = 0
         for day in self._availability_by_hour:
-            total_filled_slots = total_filled_slots + self._availability_by_hour[day].count(1)
-            total_free_slots = total_free_slots + self._availability_by_hour[day].count(0)
-        work_to_capacity_ratio = float(total_filled_slots) / float(total_filled_slots + total_free_slots)
-        return work_to_capacity_ratio
+            total_filled_slots += self._availability_by_hour[day].count(1)
+            total_free_slots += self._availability_by_hour[day].count(0)
+        return float(total_filled_slots) / (total_filled_slots + total_free_slots) if (total_filled_slots + total_free_slots) > 0 else 0.0
 
-    '''def set_availability(self, day: str) -> None:
+    def set_availability(self, day: str, start_time: str, end_time: str, status: int) -> None:
         """
-        Adds a day to the person's availability list.
+        Sets the availability status for a given time range on a specified day.
+
+        The status can be 0 for available or 1 for on duty. The time range is represented by start_time and end_time
+        in 'HHMM' format.
 
         Args:
-            day (str): The day the person becomes available for duty.
-        """
-        self._availability.append(day)'''
-
-    def set_availability(self, day: str, start_time: str, end_time: str, status: str) -> None:
-        """
-        Adds a day to the person's availability list.
-
-        Args:
-            day (str): The day the person becomes available for duty.
+            day (str): The day for which to set availability.
+            start_time (str): The start time of the availability in 'HHMM' format (24-hour).
+            end_time (str): The end time of the availability in 'HHMM' format (24-hour).
+            status (int): The status to set for the time range (0 for available, 1 for on duty).
         """
         if day not in self._availability_by_hour:
-            self._availability_by_hour[day] = [-1] * 18
+            self._availability_by_hour[day] = [-1] * 18  # Initialize the day's availability with "Not in school"
         start_index = self.time_to_index(start_time)
         end_index = self.time_to_index(end_time)
 
@@ -103,25 +121,14 @@ class Person:
         for i in range(start_index, end_index):
             self._availability_by_hour[day][i] = status
 
-    def check_availability_by_day(self, day: str) -> bool:  # @todo: remove
-        """
-        Checks if the person is available on a specific day.
-
-        Args:
-            day (str): The day to check availability for.
-
-        Returns:
-            bool: True if the person is available on the specified day, False otherwise.
-        """
-        return True if day in self._availability else False
-
     def check_availability(self, day: str, start_time: str, end_time: str) -> bool:
         """
-        Checks if the person is available between start_time and end_time.
+        Checks if the person is available for a specific time range on a given day.
 
         Args:
-            start_time: The start time in 'HHMM' format (24-hour).
-            end_time: The end time in 'HHMM' format (24-hour).
+            day (str): The day to check availability.
+            start_time (str): The start time in 'HHMM' format (24-hour).
+            end_time (str): The end time in 'HHMM' format (24-hour).
 
         Returns:
             bool: True if the person is available for the entire time range, False otherwise.
@@ -130,10 +137,8 @@ class Person:
         end_index = self.time_to_index(end_time)
         if day not in self._availability_by_hour:
             return False
-        if (np.asarray(self._availability_by_hour[day][start_index:end_index]) == 0).all():
-            return True
-        else:
-            return False
+        # Check if the person is available (status 0) for the entire time range
+        return (np.asarray(self._availability_by_hour[day][start_index:end_index]) == 0).all()
 
     def add_duty(self, day: str) -> None:
         """
@@ -144,53 +149,38 @@ class Person:
         """
         self._days_assigned.append(day)
 
-    def get_duty_list(self) -> List[str]:
-        """
-        Returns the list of days the person has been assigned duties.
-
-        Returns:
-            list: A list of days the person has been assigned duties.
-        """
-        return self._days_assigned
-
-    def get_number_of_duties_taken(self) -> int:
-        """
-        Returns the total number of duties assigned to the person.
-
-        Returns:
-            int: The total number of duties the person has been assigned.
-        """
-        return len(self._days_assigned)
-
 
 class Queue:
     """
-    A queue to manage and schedule people (e.g., teachers or temps) for duties based on availability.
+    A class to manage a queue of people (e.g., teachers or temps) for duty assignments based on their availability.
+
+    This class allows adding people to the queue, checking availability for duty assignments,
+    and optimizing the distribution of duties by shuffling or calculating workload distribution metrics.
 
     Attributes:
-        _queue (list): A list that stores `Person` objects representing the people available for duty.
+        _queue (list): A list that stores `Person` objects representing individuals available for duties.
 
     Methods:
-        __init__: Initializes a new Queue object.
-        _create_queue: Creates a list of Person objects from a given list of names.
-        add_to_queue: Adds a `Person` to the queue, updating their availability.
-        select_available_person: Selects and removes a person from the queue who is available for a given day.
-        get_list: Returns the current list of people in the queue.
-        shuffle: Shuffles the people in the queue in random order.
-        _get_work_capacity_ratio: Calculates the ratio of duties taken to availability for a given person.
-        find_std_deviation: Calculates the standard deviation of the work-to-capacity ratio for all people in the queue.
+        __init__: Initializes an empty queue.
+        _create_queue: Creates a list of `Person` objects from a provided list of names.
+        add_to_queue: Adds a person to the queue or updates their availability if they are already present.
+        select_available_person: Selects and removes a person from the queue who is available for a given day and time.
+        get_list: Returns the current list of `Person` objects in the queue.
+        shuffle: Randomly shuffles the order of people in the queue.
+        _get_work_capacity_ratio: Calculates the work-to-capacity ratio for a given person.
+        find_std_deviation: Calculates the standard deviation of the work-to-capacity ratios for all people in the queue.
     """
 
     def __init__(self):
         """
-        Initializes a new Queue object with an empty list of people.
+        Initializes a new Queue object with an empty list to store available people.
         """
         self._queue = []
 
     @staticmethod
     def _create_queue(list_of_persons: List) -> List[Person]:
         """
-        Creates a list of Person objects from a given list of names.
+        Creates a list of `Person` objects from a given list of names.
 
         Args:
             list_of_persons (List[str]): A list of names representing people to be added to the queue.
@@ -206,64 +196,49 @@ class Queue:
 
     def add_to_queue(self, staff_member: str, day: str, start_time: str, end_time: str, status: int) -> None:
         """
-        Adds a `Person` object to the queue, updating their availability if they are already in the queue.
+        Adds a person to the queue or updates their availability if they are already in the queue.
 
         Args:
-            person (Person): The `Person` object to add to the queue.
+            staff_member (str): The name of the staff member to add or update.
+            day (str): The day for which the availability is being set.
+            start_time (str): The start time for the duty.
+            end_time (str): The end time for the duty.
+            status (int): The availability status (e.g., 0 for unavailable, 1 for available).
         """
-        # Iterate through the queue to find if the person already exists in the queue
+        # Check if the person is already in the queue
         for index, entry in enumerate(self._queue):
-            # Check if the current entry in the queue has the same name as the given person
             if entry.get_name() == staff_member:
-                # If the person already exists, update their availability in the queue
+                # Update the person's availability
                 self._queue[index].set_availability(day=day, start_time=start_time, end_time=end_time, status=status)
                 return
-        # If the person was not found in the queue, add them to the queue
+        # If the person is not in the queue, create a new Person object and add it
         person_to_add = Person(staff_member)
         person_to_add.set_availability(day=day, start_time=start_time, end_time=end_time, status=status)
         self._queue.append(person_to_add)
 
-    # @todo: remove
-    def select_available_person_by_day(self, day: str) -> Optional[Person]:
+    def select_available_person(self, day: str, start_time: str, end_time: str) -> Optional[Person]:
         """
-        Selects an available person from the queue for a specific day. The person is removed from the queue
-        once assigned to a duty and is added back to the queue with the duty recorded.
+        Selects and removes a person from the queue who is available for the specified day and time range.
 
         Args:
-            day (str): The day to assign a person to a duty.
+            day (str): The day to check availability.
+            start_time (str): The start time for the duty.
+            end_time (str): The end time for the duty.
 
         Returns:
-            Person or None: The selected `Person` object if available, or None if no one is available.
+            Optional[Person]: A `Person` object representing the selected available person, or `None` if no one is available.
         """
-        selected_index = None
-        for idx, person in enumerate(self._queue):
-            if person.check_availability(day=day):
-                # print(person.get_name())
-                # print(person.get_duty_list())
-                if day not in person.get_duty_list():
-                    selected_index = idx
-                    break
-        if selected_index is not None:
-            selected_person = self._queue.pop(selected_index)
-            selected_person.add_duty(day)
-            self._queue.append(selected_person)
-            # print(f'selected: {selected_person.get_name()}')
-            return selected_person
-        '''else:
-            print('Nobody available')'''
-        return None
-
-    def select_available_person(self, day, start_time, end_time) -> Optional[Person]:
         selected_index = None
         for idx, person in enumerate(self._queue):
             if person.check_availability(day=day, start_time=start_time, end_time=end_time):
                 selected_index = idx
                 break
         if selected_index is not None:
+            # Mark the selected person as unavailable for this time slot
             self._queue[selected_index].set_availability(day=day, start_time=start_time, end_time=end_time, status=1)
             return self._queue[selected_index]
 
-        # no one from the queue is available
+        # If no one is available, return None
         return None
 
     def get_list(self) -> List[Person]:
@@ -277,7 +252,9 @@ class Queue:
 
     def shuffle(self) -> None:
         """
-        Shuffles the order of people in the queue randomly.
+        Randomly shuffles the order of people in the queue.
+
+        This method is useful for randomizing the duty assignments or ensuring fairness in assignments.
         """
         shuffle(self._queue)
 
@@ -287,42 +264,80 @@ class Queue:
         Calculates the work-to-capacity ratio for a given person.
 
         Args:
-            person (Person): The `Person` object to calculate the ratio for.
+            person (Person): The person for whom the work capacity ratio is to be calculated.
 
         Returns:
-            float: The ratio of the number of duties taken to the person's availability.
+            float: The work-to-capacity ratio, representing the balance between duties assigned and availability.
         """
         return person.get_work_capacity_ratio()
 
     def find_std_deviation(self) -> float:
         """
-        Calculates the standard deviation of the work-to-capacity ratio for all people in the queue.
+        Calculates the standard deviation of the work-to-capacity ratios for all people in the queue.
+
+        This is useful for determining how evenly duties are distributed among the available staff.
 
         Returns:
             float: The standard deviation of the work-to-capacity ratios of all people in the queue.
+                   If the queue is empty, returns 0.0.
         """
         if len(self._queue) == 0:
-            return
-        mean_work_to_capacity_ratio = 0
-        for person in self._queue:
-            mean_work_to_capacity_ratio = mean_work_to_capacity_ratio + self._get_work_capacity_ratio(person)
-        mean_work_to_capacity_ratio = mean_work_to_capacity_ratio / float(len(self._queue))
+            return 0.0
 
-        sum_of_x = 0
+        mean_work_to_capacity_ratio = 0.0
         for person in self._queue:
-            x = (self._get_work_capacity_ratio(person) - mean_work_to_capacity_ratio)
-            sum_of_x = x * x
-        std_deviation = sum_of_x / len(self._queue)
-        std_deviation = math.sqrt(std_deviation)
+            mean_work_to_capacity_ratio += self._get_work_capacity_ratio(person)
+
+        mean_work_to_capacity_ratio /= len(self._queue)
+
+        sum_of_x_squared = 0
+        for person in self._queue:
+            x = self._get_work_capacity_ratio(person) - mean_work_to_capacity_ratio
+            sum_of_x_squared += x * x
+
+        std_deviation = math.sqrt(sum_of_x_squared / len(self._queue))
         return std_deviation
 
 
 class DutyRoster:
+    """
+    The DutyRoster class is responsible for managing the roster of duties for staff members.
+    It tracks the duties for each day, calculates duty durations, and maintains a list of assigned staff.
+
+    Attributes:
+        _duty_roster (dict): A dictionary where each day maps to its respective duties.
+
+    Methods:
+        __init__: Initializes an empty duty roster.
+        calculate_duration: Calculates the duration between two given times.
+        add_day: Adds a day to the duty roster if it doesn't already exist.
+        add_duty: Adds a duty to all days in the duty roster with necessary details.
+        get_duty_roster: Returns the current duty roster.
+    """
+
     def __init__(self):
+        """
+        Initializes an empty duty roster to store duty details for each day.
+        """
         self._duty_roster = {}
 
     @staticmethod
     def calculate_duration(start_time: str, end_time: str) -> float:
+        """
+        Calculates the duration between the start time and end time in hours.
+
+        Args:
+            start_time (str): The start time in the format "HHMM".
+            end_time (str): The end time in the format "HHMM".
+
+        Returns:
+            float: The duration between start_time and end_time in hours.
+
+        Notes:
+            - If the end time is earlier than the start time (indicating the period crosses midnight),
+              24 hours are added to the end time for accurate duration calculation.
+            - The function assumes start_time and end_time are in the "HHMM" format (e.g., "0930" for 9:30 AM).
+        """
         if isinstance(start_time, int):
             start_time = str(start_time)
         if isinstance(end_time, int):
@@ -353,10 +368,36 @@ class DutyRoster:
         return duration_minutes / 60
 
     def add_day(self, day):
+        """
+        Adds a day to the duty roster if it doesn't already exist.
+
+        Args:
+            day (str): The day to be added to the roster.
+
+        Notes:
+            - This method initializes an empty dictionary of duties for the specified day.
+            - If the day already exists in the roster, no action is taken.
+        """
         if day not in self._duty_roster:
             self._duty_roster[day] = {}
 
     def add_duty(self, activity, session, start_time, end_time, min_requirement, ideal_case):
+        """
+        Adds a duty to all days in the duty roster with the specified details.
+
+        Args:
+            activity (str): The name of the duty activity (e.g., "AM Activity").
+            session (str): The session during which the duty takes place (e.g., "AM", "PM").
+            start_time (str): The start time of the duty in the format "HHMM".
+            end_time (str): The end time of the duty in the format "HHMM".
+            min_requirement (int): The minimum number of staff members required for this duty.
+            ideal_case (int): The ideal number of staff members for this duty.
+
+        Notes:
+            - This method adds the duty to each day in the roster, where each day will have an entry with the activity's details.
+            - The duty details include the duration (calculated using `calculate_duration`), minimum and ideal staffing requirements,
+              and an empty list of assignees.
+        """
         for day in self._duty_roster:
             self._duty_roster[day][activity] = {
                 'session': session,
@@ -369,222 +410,269 @@ class DutyRoster:
             }
 
     def get_duty_roster(self):
-        # @todo: make this better
+        """
+        Returns the current duty roster, which contains the duties assigned to each day.
+
+        Returns:
+            dict: A dictionary where the key is the day (e.g., 'Monday') and the value is another dictionary containing
+                  duty activities with details such as time, session, requirements, and assignees.
+
+        Notes:
+            - The duty roster is a nested dictionary, where each day has its respective duties listed.
+        """
         return self._duty_roster
 
 
 class Scheduler:
     """
     The Scheduler class is responsible for assigning teachers and temporary staff (temps) to various slots
-    based on their availability, and optimizing the distribution of duties. It uses data from an Excel file
-    that contains the availability of teachers and temps in AM and PM time slots. The scheduler optimizes
-    the distribution using a shuffling and standard deviation minimization approach over 100 iterations.
+    based on their availability, and optimizing the distribution of duties. The optimization is done by
+    shuffling and minimizing the standard deviation over 100 iterations.
 
     Attributes:
-        None
+        _duty_roster: An instance of DutyRoster that manages all the duties and assignments.
 
     Methods:
-        __init__: Initializes the Scheduler by reading data from an Excel file, processing the availability
-                  of teachers and temps, and performing duty assignment and optimization.
+        __init__: Initializes the scheduler, reads availability data from Excel, assigns duties, and optimizes the schedule.
         _write_results_to_excel: Saves the final duty assignments and work distribution to an Excel file.
-        _get_by_am_pm: Helper method to extract availability data for AM and PM time slots from a DataFrame.
-        _get_data_by_sheet: Combines the AM and PM availability data for teachers and temps from Excel sheets.
-        _get_data_from_excel: Reads availability data for teachers and temps from an Excel file.
-        _create_duties_per_slot: Creates a duty list for a specific time slot, assigning available teachers and
-                                 temps based on predefined roles and conditions (e.g., PreN, N, K for AM, N, K for PM).
+        _get_staff_availability: Reads availability data for teachers and temps from an Excel file and returns the lists.
+        _get_duties_list_from_excel: Reads duty breakdown from an Excel file and adds it to the duty roster.
+        _add_to_queue_for_slot: Helper function to add staff members to the respective queues based on their availability.
     """
 
     def __init__(self):
         """
-        Initializes the Scheduler by loading teacher and temp availability data from an Excel file
-        ('AvailabilityList.xlsx'), processes the availability, and attempts to optimize the duty assignment.
+        Initializes the Scheduler by reading availability data from an Excel file ('AvailabilityList.xlsx'),
+        processes the availability, and attempts to optimize the duty assignment.
 
         Steps:
-            - Loads the availability data for teachers and temps.
-            - Creates queues for teachers and temps for each slot.
-            - Performs 100 iterations of shuffling the queues and assigns duties, trying to minimize the
-              standard deviation of duty assignments.
+            - Loads teacher and temp availability data.
+            - Creates duty queues for teachers and temps.
+            - Performs 100 iterations of shuffling and assigns duties, trying to minimize the standard deviation.
             - Outputs the best result after 100 iterations to an Excel file.
         """
 
+        # Step 1: Load availability data
         teachers_am_list, teachers_pm_list, temps_am_list, temps_pm_list = self._get_staff_availability(
             'AvailabilityList.xlsx')
 
+        # Step 2: Initialize duty roster
         self._duty_roster = DutyRoster()
-
         for slot in teachers_am_list:
             day = f"{slot[0]}_{str(slot[1]).replace(' ', '_')}"
             self._duty_roster.add_day(day)
 
+        # Step 3: Load duties breakdown from Excel
         self._get_duties_list_from_excel('DutiesBreakdown.xlsx')
 
+        # Step 4: Create queues for teachers and temps
         teacher_list = Queue()
         temp_list = Queue()
 
-        # Process all the slots
+        # Process all the slots and add to queues
         self._add_to_queue_for_slot(teacher_list, teachers_am_list, '0900', '1400')
         self._add_to_queue_for_slot(teacher_list, teachers_pm_list, '1400', '1800')
         self._add_to_queue_for_slot(temp_list, temps_am_list, '0900', '1400')
         self._add_to_queue_for_slot(temp_list, temps_pm_list, '1400', '1800')
 
-        # iterate 100 times until the distribution is most fair...
-        min_std_deviation = 99999
-        success_count = 0
-        finalized_teacher_list = None
-        finalized_temp_list = None
-        final_duty_list = None
-        final_roster = None
+        # Step 5: Optimize duty assignment through 100 iterations
+        best_schedule, finalized_teacher_list, finalized_temp_list = self._optimize_duty_assignment(teacher_list, temp_list)
 
-        for i in range(0, 100):
-            # make copies of teacher and temp queues
-            _teacher_list = copy.deepcopy(teacher_list)
-            _temp_list = copy.deepcopy(temp_list)
+        # Step 6: Output the final results
+        self._write_roster_to_excel(best_schedule, finalized_teacher_list, finalized_temp_list)
 
-            duty_roster = copy.deepcopy(self._duty_roster.get_duty_roster())
-            for day in duty_roster:
-                # shuffle queue at the start of the day
-                _teacher_list.shuffle()
-                _temp_list.shuffle()
-                for duty in duty_roster[day]:
-                    print(f'setting duties for {duty}...')
-                    #for i in range(0, int(duty_roster[day][duty]['ideal_case'])):
-                    for i in range(0, int(duty_roster[day][duty]['min_requirement'])):
-                        selected_teacher = None
-                        selected_temp = None
-                        selected_teacher = _teacher_list.select_available_person(
-                            day=day,
-                            start_time=duty_roster[day][duty]['start_time'],
-                            end_time=duty_roster[day][duty]['end_time']
-                        )
+    def _add_to_queue_for_slot(self, queue, slot_list, start_time, end_time):
+        """
+        Adds staff members to a queue based on their availability in each slot.
 
-                        # If no teacher is found, try to assign a temp
-                        if selected_teacher is not None:
-                            duty_roster[day][duty]['assignees'].append(selected_teacher)
-                            print(f'Selected {selected_teacher.get_name()} for {day}')
-                        else:
-                            selected_temp = _temp_list.select_available_person(
-                                day=day,
-                                start_time=duty_roster[day][duty]['start_time'],
-                                end_time=duty_roster[day][duty]['end_time']
-                            )
-                            if selected_temp is not None:
-                                duty_roster[day][duty]['assignees'].append(selected_temp)
-                                print(f'Selected {selected_temp.get_name()} for {day}')
-
-                        # If neither teacher nor temp is found and it's not the last iteration, raise an error
-                        if (selected_teacher is None) and (selected_temp is None) and (
-                                i + 1 < int(duty_roster[day][duty]['min_requirement'])):
-                            assert False, f"Error: Could not find enough staff for {day} " \
-                                          f"from {duty_roster[day][duty]['start_time']} to {duty_roster[day][duty]['end_time']}. " \
-                                          f"Minimum requirement not met."
-
-            sum_of_std_deviation = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
-            if sum_of_std_deviation < min_std_deviation:
-                min_std_deviation = sum_of_std_deviation
-                finalized_teacher_list = copy.deepcopy(_teacher_list)
-                finalized_temp_list = copy.deepcopy(_temp_list)
-                assert duty_roster is not None
-                final_roster = duty_roster
-
-            success_count += 1
-
-        print(f'Number of successful runs: {success_count}')
-
-        if (finalized_temp_list is not None) and (finalized_teacher_list is not None):
-            print('------------------------------------')
-            print('Print Best Results:')
-            for person in finalized_temp_list.get_list():
-                print(f'Person: {person.get_name()}, Work-To-Capacity: {person.get_work_capacity_ratio()}')
-            for person in finalized_teacher_list.get_list():
-                print(f'Person: {person.get_name()}, Work-To-Capacity: {person.get_work_capacity_ratio()}')
-            self._write_roster_to_excel(final_roster)
-
-    @staticmethod
-    def _add_to_queue_for_slot(queue, slot_list, start_time, end_time):
+        Args:
+            queue (Queue): The queue to add staff members to.
+            slot_list (list): A list of availability slots, where each slot contains day, session, and staff members.
+            start_time (str): The start time for the slot.
+            end_time (str): The end time for the slot.
+        """
         for slot in slot_list:
-            # Create the day string
+            # Create the day string by replacing spaces with underscores
             day = f"{slot[0]}_{str(slot[1]).replace(' ', '_')}"
 
-            # Clean the staff members list by removing NaNs and stripping whitespace
+            # Clean and filter staff members, remove NaNs and extra spaces
             staff_members = [staff_member.strip() for staff_member in slot[2:] if pd.notna(staff_member)]
 
-            # Add each staff member to the queue
+            # Add each valid staff member to the queue
             for staff_member in staff_members:
                 queue.add_to_queue(staff_member=staff_member, day=day, start_time=start_time, end_time=end_time,
                                    status=0)
 
+    def _optimize_duty_assignment(self, teacher_list, temp_list):
+        """
+        Optimizes the duty assignment by performing 100 iterations of shuffling the staff queues and
+        minimizing the standard deviation of assignments. Returns the best schedule.
+
+        Args:
+            teacher_list (Queue): The queue containing available teachers.
+            temp_list (Queue): The queue containing available temps.
+
+        Returns:
+            dict: The optimized duty roster.
+        """
+        min_std_deviation = float('inf')
+        finalized_teacher_list = None
+        finalized_temp_list = None
+        final_roster = None
+
+        for _ in range(100):
+            # Make copies of the teacher and temp lists to shuffle
+            _teacher_list = copy.deepcopy(teacher_list)
+            _temp_list = copy.deepcopy(temp_list)
+
+            # Copy of the duty roster for this iteration
+            duty_roster = copy.deepcopy(self._duty_roster.get_duty_roster())
+
+            # Shuffle and assign duties for the day
+            for day in duty_roster:
+                _teacher_list.shuffle()
+                _temp_list.shuffle()
+
+                for duty_name, duty_info in duty_roster[day].items():
+                    # Now 'duty_info' contains the dictionary of the current duty's details
+                    print(f"Assigning duties for: {duty_name}")
+                    print(f"Duty details: {duty_info}")
+
+                    for _ in range(int(duty_info['min_requirement'])):
+                        selected_teacher = _teacher_list.select_available_person(
+                            day, duty_info['start_time'], duty_info['end_time']
+                        )
+                        selected_temp = None
+
+                        # Assign teacher if available, else assign temp
+                        if selected_teacher is not None:
+                            duty_info['assignees'].append(selected_teacher)
+                        else:
+                            selected_temp = _temp_list.select_available_person(
+                                day, duty_info['start_time'], duty_info['end_time']
+                            )
+                            if selected_temp is not None:
+                                duty_info['assignees'].append(selected_temp)
+
+                        # If neither a teacher nor a temp is found, raise an error
+                        if selected_teacher is None and selected_temp is None:
+                            raise ValueError(
+                                f"Unable to find sufficient staff for {day} from {duty_info['start_time']} to {duty_info['end_time']}")
+
+            # Evaluate the quality of this schedule by checking the standard deviation
+            sum_of_std_deviation = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
+
+            # If this schedule is better (lower std deviation), store it
+            if sum_of_std_deviation < min_std_deviation:
+                min_std_deviation = sum_of_std_deviation
+                finalized_teacher_list = copy.deepcopy(_teacher_list)
+                finalized_temp_list = copy.deepcopy(_temp_list)
+                final_roster = duty_roster
+
+        return final_roster, finalized_teacher_list, finalized_temp_list
+
     @staticmethod
-    def _write_roster_to_excel(roster: dict) -> None:
+    def _write_roster_to_excel(roster: dict, finalized_teacher_list: Queue, finalized_temp_list: Queue) -> None:
+        """
+        Writes the duty roster to an Excel file with two sheets:
+        1. The first sheet ("Duty Roster") contains the daily duty assignments and the teachers (or temps) assigned to each duty.
+        2. The second sheet ("Work Distribution") contains the work-to-capacity ratio for each person (both teachers and temps),
+           showing how much work each person has been assigned relative to their availability.
+
+        Args:
+            roster (dict): A dictionary representing the duty roster, where each day contains duties with corresponding assignees.
+            finalized_teacher_list (Queue): A queue containing the list of teachers with their availability and assigned duties.
+            finalized_temp_list (Queue): A queue containing the list of temps with their availability and assigned duties.
+
+        Returns:
+            None: The function writes the duty roster and work distribution to an Excel file named 'teacher_schedule_with_duties.xlsx'.
+
+        Example:
+            _write_roster_to_excel(roster, finalized_teacher_list, finalized_temp_list)
+
+        The output file will contain:
+            - A sheet named "Duty Roster" with the daily duty assignments and the teachers assigned to each duty.
+            - A sheet named "Work Distribution" showing the name of each person and their work-to-capacity ratio.
+        """
         duties = []
-        teachers_by_day = {}  # Dictionary to store teacher lists by day
+        teachers_by_day = {}
 
         for day in roster:
-            # Initialize a list of duties for each day in the dictionary
             teachers_by_day[day] = []
 
             for duty in roster[day]:
-                duties.append(duty)  # Add the duty to the duties list
-
-                # Extract assignees for the current duty (duty['assignees'])
                 assignees = roster[day][duty]['assignees']
+                teachers_for_duty = [assignee.get_name() for assignee in assignees] + ['NA'] * (6 - len(assignees))
 
-                # Create a list of teachers for the current duty
-                teachers_for_duty = []
+                teachers_by_day[day].append((duty, teachers_for_duty))
 
-                # Loop through assignees and add their names to the current duty's teacher list
-                for idx, assignee in enumerate(assignees):
-                    teachers_for_duty.append(assignee.get_name())
-
-                # If there are fewer assignees than the max, append 'NA' or placeholder
-                for idx in range(len(assignees), 6):  # Assuming max 6 assignees per duty
-                    teachers_for_duty.append('NA')  # Placeholder for missing teachers
-
-                # Add the current duty's teachers to the list for that day
-                teachers_by_day[day].append((duty, teachers_for_duty))  # Storing duty name along with teachers
-
-        # Print the structured teachers_by_day dictionary for debugging
-        print(teachers_by_day)
-
-        # Prepare data for Excel with duty as the second column
+        # Prepare data for the first sheet (duty roster)
         data_for_excel = []
 
-        # Loop through each day in the teachers_by_day dictionary
         for day, duties in teachers_by_day.items():
-            # For each duty on the given day, prepend the day and then duty to the list of teachers
             for duty, duty_teachers in duties:
-                # Create a row: first the day, then the duty, followed by the teachers
-                row = [day, duty] + duty_teachers  # Add day, duty, and teacher names
+                row = [day, duty] + duty_teachers
                 data_for_excel.append(row)
 
-        # Now, create a DataFrame from the list of rows
-        columns = ['Day', 'Duty', 'Teacher 1', 'Teacher 2', 'Teacher 3', 'Teacher 4', 'Teacher 5', 'Teacher 6']
+        # Prepare data for the second sheet (work distribution)
+        people = []
+        number_of_duties_taken = []
+        for person in finalized_temp_list.get_list():
+            people.append(person.get_name())
+            number_of_duties_taken.append(person.get_work_capacity_ratio())
+        for person in finalized_teacher_list.get_list():
+            people.append(person.get_name())
+            number_of_duties_taken.append(person.get_work_capacity_ratio())
 
-        df = pd.DataFrame(data_for_excel, columns=columns)
+        work_distribution = pd.DataFrame(
+            {'Person': people,
+             'Work To Capacity': number_of_duties_taken,
+             })
 
-        # Write the DataFrame to an Excel file
-        file_name = 'teacher_schedule_with_duties.xlsx'
-        df.to_excel(file_name, index=False)
+        # Create a DataFrame for the duty roster (first sheet)
+        df_roster = pd.DataFrame(data_for_excel,
+                                 columns=['Day', 'Duty', 'Teacher 1', 'Teacher 2', 'Teacher 3', 'Teacher 4',
+                                          'Teacher 5',
+                                          'Teacher 6'])
 
-        print(f"Data has been written to {file_name}")
+        # Create a Pandas Excel writer object and write both sheets to the file
+        with pd.ExcelWriter('teacher_schedule_with_duties.xlsx', engine='xlsxwriter') as writer:
+            # Write the duty roster to the first sheet
+            df_roster.to_excel(writer, sheet_name='Duty Roster', index=False)
+
+            # Write the work distribution to the second sheet
+            work_distribution.to_excel(writer, sheet_name='Work Distribution', index=False)
+
+        print("Data has been written to teacher_schedule_with_duties.xlsx")
 
     @staticmethod
     def _get_staff_availability(file_name) -> Tuple[List, List, List, List]:
+        """
+        Reads the staff availability data for teachers and temps from an Excel file.
+
+        Args:
+            file_name (str): The name of the Excel file containing availability data.
+
+        Returns:
+            tuple: A tuple of four lists: teachers_am_list, teachers_pm_list, temps_am_list, temps_pm_list.
+        """
         df_teachers_am = pd.read_excel(file_name, sheet_name='Teachers_AM')
         df_teachers_pm = pd.read_excel(file_name, sheet_name='Teachers_PM')
         df_temps_am = pd.read_excel(file_name, sheet_name='Temps_AM')
         df_temps_pm = pd.read_excel(file_name, sheet_name='Temps_PM')
 
-        teachers_am_list = df_teachers_am.values.tolist()
-        teachers_pm_list = df_teachers_pm.values.tolist()
-        temps_am_list = df_temps_am.values.tolist()
-        temps_pm_list = df_temps_pm.values.tolist()
-
-        return teachers_am_list, teachers_pm_list, temps_am_list, temps_pm_list
+        return df_teachers_am.values.tolist(), df_teachers_pm.values.tolist(), df_temps_am.values.tolist(), df_temps_pm.values.tolist()
 
     def _get_duties_list_from_excel(self, file_name):
+        """
+        Reads the duties breakdown from an Excel file and adds it to the duty roster.
+
+        Args:
+            file_name (str): The name of the Excel file containing duty data.
+        """
         dataframe = pd.read_excel(file_name)
-        for activity, session, start_time, end_time, min_requirement, ideal_case in \
-                zip(dataframe['Activity'], dataframe['Session'], dataframe['Start Time'], dataframe['End Time'], \
+        for activity, session, start_time, end_time, min_requirement, ideal_case in zip(
+                dataframe['Activity'], dataframe['Session'], dataframe['Start Time'], dataframe['End Time'],
                 dataframe['Minimum Requirement'], dataframe['Ideal Case']):
             self._duty_roster.add_duty(
                 activity=activity,
