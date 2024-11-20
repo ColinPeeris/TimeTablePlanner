@@ -97,7 +97,39 @@ class Person:
         for day in self._availability_by_hour:
             total_filled_slots += self._availability_by_hour[day].count(1)
             total_free_slots += self._availability_by_hour[day].count(0)
-        return float(total_filled_slots) / (total_filled_slots + total_free_slots) if (total_filled_slots + total_free_slots) > 0 else 0.0
+        return float(total_filled_slots) / (total_filled_slots + total_free_slots) \
+            if (total_filled_slots + total_free_slots) > 0 else 0.0
+
+    def get_hours_worked(self) -> float:
+        """
+        Calculates the total number of hours worked by the person.
+
+        Iterates through the person's availability for each day and counts the number of 30-minute slots marked as 'on duty' (1).
+        The total number of slots is then converted to hours by dividing by 2.
+
+        Returns:
+            float: The total number of hours worked by the person.
+        """
+        total_filled_slots = 0  # Initialize the count of filled duty slots
+        for day in self._availability_by_hour:
+            total_filled_slots += self._availability_by_hour[day].count(1)  # Count slots marked as 'on duty' (1)
+        return float(total_filled_slots) / 2  # Convert slots to hours (each slot is 30 minutes)
+
+    def get_hours_in_school(self) -> float:
+        """
+        Calculates the total number of hours the person is in school.
+
+        Iterates through the person's availability for each day and counts the number of 30-minute slots
+        where the person is either available (0) or on duty (1). The total number of slots is then
+        converted to hours by dividing by 2.
+
+        Returns:
+            float: The total number of hours the person is in school.
+        """
+        total_slots_in_school = 0
+        for day in self._availability_by_hour:
+            total_slots_in_school += self._availability_by_hour[day].count(0) + self._availability_by_hour[day].count(1)
+        return float(total_slots_in_school) / 2
 
     def set_availability(self, day: str, start_time: str, end_time: str, status: int) -> None:
         """
@@ -236,7 +268,12 @@ class Queue:
         if selected_index is not None:
             # Mark the selected person as unavailable for this time slot
             self._queue[selected_index].set_availability(day=day, start_time=start_time, end_time=end_time, status=1)
-            return self._queue[selected_index]
+
+            # Reorder the queue: Move the selected person to the back
+            selected_person = self._queue.pop(selected_index)  # Remove the selected person
+            self._queue.append(selected_person)  # Append the selected person to the back of the queue
+
+            return selected_person
 
         # If no one is available, return None
         return None
@@ -476,7 +513,10 @@ class Scheduler:
         self._add_to_queue_for_slot(temp_list, temps_pm_list, '1400', '1800')
 
         # Step 5: Optimize duty assignment through 100 iterations
-        best_schedule, finalized_teacher_list, finalized_temp_list = self._optimize_duty_assignment(teacher_list, temp_list)
+        best_schedule, finalized_teacher_list, finalized_temp_list = self._optimize_duty_assignment(
+            teacher_list,
+            temp_list
+        )
 
         # Step 6: Output the final results
         self._write_roster_to_excel(best_schedule, finalized_teacher_list, finalized_temp_list)
@@ -534,13 +574,15 @@ class Scheduler:
                 _temp_list.shuffle()
 
                 for duty_name, duty_info in duty_roster[day].items():
-                    self._assign_staff_to_duty(day, duty_info, _teacher_list, _temp_list, duty_info['min_requirement'], ideal_case=False)
+                    self._assign_staff_to_duty(
+                        day, duty_info, _teacher_list, _temp_list, duty_info['min_requirement'], ideal_case=False)
 
                 for duty_name, duty_info in duty_roster[day].items():
                     if duty_info['min_requirement'] < duty_info['ideal_case']:
-                        self._assign_staff_to_duty(day, duty_info, _teacher_list, _temp_list, duty_info['ideal_case'] - duty_info['min_requirement'],
-                                                   ideal_case=True)
-
+                        self._assign_staff_to_duty(
+                            day, duty_info, _teacher_list, _temp_list,
+                            duty_info['ideal_case'] - duty_info['min_requirement'],
+                            ideal_case=True)
 
             # Evaluate the quality of this schedule by checking the standard deviation
             sum_of_std_deviation = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
@@ -592,7 +634,7 @@ class Scheduler:
             # If neither a teacher nor a temp is found, raise an error
             if not selected_teacher and not selected_temp:
                 raise ValueError(
-                    f"Unable to find sufficient staff for {duty_info['start_time']} to {duty_info['end_time']}"
+                    f"Unable to find sufficient staff for {duty_info['start_time']} to {duty_info['end_time']} on {day}"
                 )
 
     @staticmethod
@@ -641,16 +683,26 @@ class Scheduler:
         # Prepare data for the second sheet (work distribution)
         people = []
         number_of_duties_taken = []
+        hours_worked_list = []  # New list to store hours worked
+        hours_in_school_list = []  # New list to store hours in school
+
         for person in finalized_temp_list.get_list():
             people.append(person.get_name())
             number_of_duties_taken.append(person.get_work_capacity_ratio())
+            hours_worked_list.append(person.get_hours_worked())  # Get hours worked
+            hours_in_school_list.append(person.get_hours_in_school())  # Get hours in school
+
         for person in finalized_teacher_list.get_list():
             people.append(person.get_name())
             number_of_duties_taken.append(person.get_work_capacity_ratio())
+            hours_worked_list.append(person.get_hours_worked())  # Get hours worked
+            hours_in_school_list.append(person.get_hours_in_school())  # Get hours in school
 
         work_distribution = pd.DataFrame(
             {'Person': people,
              'Work To Capacity': number_of_duties_taken,
+             'Hours Worked': hours_worked_list,  # Add hours worked column
+             'Hours In School': hours_in_school_list  # Add hours in school column
              })
 
         # Create a DataFrame for the duty roster (first sheet)
