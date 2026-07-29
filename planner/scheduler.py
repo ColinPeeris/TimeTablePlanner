@@ -9,11 +9,34 @@ from .queue import Queue
 
 class Scheduler:
     """
-    The Scheduler class is responsible for assigning staff to duties, optimizing distribution,
-    and writing the final results to Excel.
+    Assigns staff to duty slots based on availability and writes the final roster to Excel.
+
+    The scheduler performs the following steps when instantiated:
+      1. Loads staff availability from `AvailabilityList.xlsx`.
+      2. Creates a `DutyRoster` and populates it with days from teacher availability.
+      3. Loads duty definitions from `DutiesBreakdown.xlsx`.
+      4. Builds separate queues for teachers and temps and marks each person's availability.
+      5. Runs a multi-iteration optimization loop that shuffles the queues, assigns staff to duties,
+         and selects the best schedule based on the lowest combined workload standard deviation.
+      6. Writes the selected roster and work distribution to `teacher_schedule_with_duties.xlsx`.
+
+    This class is intentionally designed as an orchestration layer; most detailed logic lives in the
+    helper methods `_add_to_queue_for_slot`, `_optimize_duty_assignment`, `_assign_staff_to_duty`, and
+    `_write_roster_to_excel`.
     """
 
     def __init__(self):
+        """
+        Initialize the Scheduler and execute the duty planning workflow.
+
+        The constructor performs the full scheduling process on instantiation:
+          - load staff availability from Excel
+          - initialize the duty roster for each day
+          - load duty definitions from Excel
+          - build teacher and temp queues based on availability
+          - optimize assignment over multiple candidate schedules
+          - write the selected roster and distribution to Excel
+        """
         teachers_am_list, teachers_pm_list, temps_am_list, temps_pm_list = self._get_staff_availability(
             "AvailabilityList.xlsx"
         )
@@ -24,6 +47,7 @@ class Scheduler:
         self._get_duties_list_from_excel("DutiesBreakdown.xlsx")
         teacher_list = Queue()
         temp_list = Queue()
+        # Add staff members to the queue for each time slot
         self._add_to_queue_for_slot(teacher_list, teachers_am_list, "0900", "1400")
         self._add_to_queue_for_slot(teacher_list, teachers_pm_list, "1400", "1800")
         self._add_to_queue_for_slot(temp_list, temps_am_list, "0900", "1400")
@@ -35,6 +59,19 @@ class Scheduler:
         self._write_roster_to_excel(best_schedule, finalized_teacher_list, finalized_temp_list)
 
     def _add_to_queue_for_slot(self, queue, slot_list, start_time, end_time):
+        """
+        Add staff availability to a queue for a given time slot.
+
+        Args:
+            queue (Queue): The queue to populate with available staff.
+            slot_list (list): Rows of availability data, where each row contains day, session, and staff names.
+            start_time (str): The slot start time in HHMM.
+            end_time (str): The slot end time in HHMM.
+
+        Notes:
+            The day string is normalized by replacing spaces in the session label with underscores.
+            Empty or NaN staff entries are ignored.
+        """
         for slot in slot_list:
             day = f"{slot[0]}_{str(slot[1]).replace(' ', '_')}"
             staff_members = [staff_member.strip() for staff_member in slot[2:] if pd.notna(staff_member)]
@@ -43,6 +80,20 @@ class Scheduler:
                                    status=0)
 
     def _optimize_duty_assignment(self, teacher_list, temp_list):
+        """
+        Generate and evaluate candidate duty assignments to find the best distribution.
+
+        This method performs a fixed number of iterations, each time shuffling the teacher and temp queues,
+        assigning staff to every duty slot, and computing the combined standard deviation of workload ratios.
+        The lowest-scoring assignment is retained and returned.
+
+        Args:
+            teacher_list (Queue): Queue of available teachers.
+            temp_list (Queue): Queue of available temps.
+
+        Returns:
+            tuple: (best_roster, best_teacher_list, best_temp_list)
+        """
         min_std_deviation = float("inf")
         finalized_teacher_list = None
         finalized_temp_list = None
@@ -72,6 +123,22 @@ class Scheduler:
         return final_roster, finalized_teacher_list, finalized_temp_list
 
     def _assign_staff_to_duty(self, day, duty_info, teacher_list, temp_list, required_count, ideal_case: bool):
+        """
+        Assigns staff to a single duty until the required headcount is reached.
+
+        Args:
+            day (str): Normalized day identifier for the duty (e.g. "Monday_AM").
+            duty_info (dict): Duty metadata including start_time, end_time, assignees, min_requirement, and ideal_case.
+            teacher_list (Queue): Queue of available teachers.
+            temp_list (Queue): Queue of available temps.
+            required_count (int): Number of staff to assign for this pass.
+            ideal_case (bool): Whether this assignment is filling optional ideal positions.
+
+        Notes:
+            - Teachers are chosen first, then temps if no teacher is available.
+            - If `ideal_case` is True, a single assignment is attempted and the method returns early.
+            - If `ideal_case` is False and no staff is available, a ValueError is raised.
+        """
         for _ in range(required_count):
             selected_teacher = teacher_list.select_available_person(
                 day, duty_info["start_time"], duty_info["end_time"]
@@ -94,6 +161,19 @@ class Scheduler:
 
     @staticmethod
     def _write_roster_to_excel(roster: dict, finalized_teacher_list: Queue, finalized_temp_list: Queue) -> None:
+        """
+        Write the finalized duty roster and work distribution to an Excel file.
+
+        Args:
+            roster (dict): The selected duty schedule keyed by day.
+            finalized_teacher_list (Queue): Final teacher queue with updated workload state.
+            finalized_temp_list (Queue): Final temp queue with updated workload state.
+
+        Output:
+            Creates `teacher_schedule_with_duties.xlsx` with two sheets:
+              - Duty Roster
+              - Work Distribution
+        """
         teachers_by_day = {}
         for day in roster:
             teachers_by_day[day] = []
@@ -137,6 +217,15 @@ class Scheduler:
 
     @staticmethod
     def _get_staff_availability(file_name) -> Tuple[List, List, List, List]:
+        """
+        Read staff availability sheets from an Excel file.
+
+        Args:
+            file_name (str): Path to the Excel file containing availability data.
+
+        Returns:
+            tuple: Four lists representing Teachers_AM, Teachers_PM, Temps_AM, Temps_PM.
+        """
         df_teachers_am = pd.read_excel(file_name, sheet_name="Teachers_AM")
         df_teachers_pm = pd.read_excel(file_name, sheet_name="Teachers_PM")
         df_temps_am = pd.read_excel(file_name, sheet_name="Temps_AM")
@@ -144,6 +233,16 @@ class Scheduler:
         return df_teachers_am.values.tolist(), df_teachers_pm.values.tolist(), df_temps_am.values.tolist(), df_temps_pm.values.tolist()
 
     def _get_duties_list_from_excel(self, file_name):
+        """
+        Load duty definitions from an Excel file and add them to the roster.
+
+        Args:
+            file_name (str): Path to the Excel file containing duty definitions.
+
+        Notes:
+            Each duty row must include Activity, Session, Start Time, End Time,
+            Minimum Requirement, and Ideal Case.
+        """
         dataframe = pd.read_excel(file_name)
         for activity, session, start_time, end_time, min_requirement, ideal_case in zip(
                 dataframe["Activity"], dataframe["Session"], dataframe["Start Time"], dataframe["End Time"],
