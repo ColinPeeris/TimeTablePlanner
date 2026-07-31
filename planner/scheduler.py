@@ -21,7 +21,7 @@ class Scheduler:
       6. Writes the selected roster and work distribution to `teacher_schedule_with_duties.xlsx`.
 
     This class is intentionally designed as an orchestration layer; most detailed logic lives in the
-    helper methods `_add_to_queue_for_slot`, `_optimize_duty_assignment`, `_assign_staff_to_duty`, and
+    helper methods `_add_to_queue`, `_optimize_duty_assignment`, `_assign_staff_to_duty`, and
     `_write_roster_to_excel`.
     """
 
@@ -37,47 +37,36 @@ class Scheduler:
           - optimize assignment over multiple candidate schedules
           - write the selected roster and distribution to Excel
         """
-        teachers_am_list, teachers_pm_list, temps_am_list, temps_pm_list = self._get_staff_availability(
-            "AvailabilityList.xlsx"
-        )
+        teachers_list, temps_list = self._get_staff_availability("AvailabilityList.xlsx")
         self._duty_roster = DutyRoster()
-        for slot in teachers_am_list:
+        for slot in teachers_list:
             day = f"{slot[0]}_{str(slot[1]).replace(' ', '_')}"
             self._duty_roster.add_day(day)
         self._get_duties_list_from_excel("DutiesBreakdown.xlsx")
         teacher_list = Queue()
         temp_list = Queue()
-        # Add staff members to the queue for each time slot
-        self._add_to_queue_for_slot(teacher_list, teachers_am_list, "0900", "1400")
-        self._add_to_queue_for_slot(teacher_list, teachers_pm_list, "1400", "1800")
-        self._add_to_queue_for_slot(temp_list, temps_am_list, "0900", "1400")
-        self._add_to_queue_for_slot(temp_list, temps_pm_list, "1400", "1800")
+        self._add_to_queue(teacher_list, teachers_list)
+        self._add_to_queue(temp_list, temps_list)
+
         best_schedule, finalized_teacher_list, finalized_temp_list = self._optimize_duty_assignment(
             teacher_list,
             temp_list
         )
         self._write_roster_to_excel(best_schedule, finalized_teacher_list, finalized_temp_list)
 
-    def _add_to_queue_for_slot(self, queue, slot_list, start_time, end_time):
-        """
-        Add staff availability to a queue for a given time slot.
-
-        Args:
-            queue (Queue): The queue to populate with available staff.
-            slot_list (list): Rows of availability data, where each row contains day, session, and staff names.
-            start_time (str): The slot start time in HHMM.
-            end_time (str): The slot end time in HHMM.
-
-        Notes:
-            The day string is normalized by replacing spaces in the session label with underscores.
-            Empty or NaN staff entries are ignored.
-        """
-        for slot in slot_list:
-            day = f"{slot[0]}_{str(slot[1]).replace(' ', '_')}"
-            staff_members = [staff_member.strip() for staff_member in slot[2:] if pd.notna(staff_member)]
-            for staff_member in staff_members:
-                queue.add_to_queue(staff_member=staff_member, day=day, start_time=start_time, end_time=end_time,
-                                   status=0)
+    def _add_to_queue(self, queue, staff_list):
+        for row in staff_list:
+            day = f"{row[0]}_{str(row[1]).replace(' ', '_')}"
+            staff_name = row[2].strip()
+            start_time = str(row[3]).zfill(4)
+            end_time = str(row[4]).zfill(4)
+            queue.add_to_queue(
+                staff_member=staff_name,
+                day=day,
+                start_time=start_time,
+                end_time=end_time,
+                status=0
+            )
 
     def _optimize_duty_assignment(self, teacher_list, temp_list):
         """
@@ -216,21 +205,24 @@ class Scheduler:
         print("Data has been written to teacher_schedule_with_duties.xlsx")
 
     @staticmethod
-    def _get_staff_availability(file_name) -> Tuple[List, List, List, List]:
+    def _get_staff_availability(file_name: str) -> Tuple[List, List]:
         """
-        Read staff availability sheets from an Excel file.
+        Load staff availability from an Excel file with two sheets: "Teachers" and "Temps".
 
         Args:
-            file_name (str): Path to the Excel file containing availability data.
+            file_name (str): Path to the Excel file containing staff availability.
 
         Returns:
-            tuple: Four lists representing Teachers_AM, Teachers_PM, Temps_AM, Temps_PM.
+            tuple:  (teachers_list, temps_list) where each list contains rows of
+                    [Day, Session, Name, Start Time, End Time].
         """
-        df_teachers_am = pd.read_excel(file_name, sheet_name="Teachers_AM")
-        df_teachers_pm = pd.read_excel(file_name, sheet_name="Teachers_PM")
-        df_temps_am = pd.read_excel(file_name, sheet_name="Temps_AM")
-        df_temps_pm = pd.read_excel(file_name, sheet_name="Temps_PM")
-        return df_teachers_am.values.tolist(), df_teachers_pm.values.tolist(), df_temps_am.values.tolist(), df_temps_pm.values.tolist()
+        df_teachers = pd.read_excel(file_name, sheet_name="Teachers")
+        df_temps = pd.read_excel(file_name, sheet_name="Temps")
+
+        return (
+            df_teachers.values.tolist(),
+            df_temps.values.tolist()
+        )
 
     def _get_duties_list_from_excel(self, file_name):
         """

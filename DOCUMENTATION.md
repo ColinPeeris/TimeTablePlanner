@@ -44,32 +44,43 @@ Example row:
 
 ### 2. AvailabilityList.xlsx
 
-This file lists which teachers and temps are available on which days.
-It must contain four separate sheets:
+This file lists when teachers and temporary staff are available to work.
 
-- `Teachers_AM`
-- `Teachers_PM`
-- `Temps_AM`
-- `Temps_PM`
+It must contain two sheets:
 
-Each sheet should list the day of the week, the date, and the staff members who are available for that session.
+- `Teachers`
+- `Temps`
 
-- `Teachers_AM` should contain all teachers available in the morning.
-- `Teachers_PM` should contain all teachers available in the afternoon.
-- `Temps_AM` should contain all temps available in the morning.
-- `Temps_PM` should contain all temps available in the afternoon.
+Each sheet should contain one row for each staff member's availability on each day.
 
-A simple example layout for a sheet:
+The file must include the following columns:
 
-| Day     | Date       | Staff 1 | Staff 2 | Staff 3 |
-|---------|------------|---------|---------|---------|
-| Monday  | 18/11/2024 | Denise  | Melissa | Lay Bee |
-| Tuesday | 19/11/2024 | Denise  | Melissa | Lay Bee |
+- `Day`
+  - The day of the week (for example: Monday, Tuesday).
+- `Date`
+  - The calendar date.
+- `Staff Name`
+  - The name of the teacher or temporary staff member.
+- `Start Time`
+  - The time the staff member starts work, in `HHMM` format (for example: `0900`).
+- `End Time`
+  - The time the staff member finishes work, in `HHMM` format (for example: `1400` or `1800`).
 
-- Use the `Day` column for the day of the week.
-- Use the `Date` column for the calendar date.
-- List the names of available staff in additional columns.
-- Empty cells are allowed when there are fewer available staff.
+Example layout:
+
+| Day | Date | Staff Name | Start Time | End Time |
+|-----|------|------------|------------|----------|
+| Monday | 18/11/2024 | Denise | 0900 | 1800 |
+| Monday | 18/11/2024 | Melissa | 0900 | 1400 |
+| Monday | 18/11/2024 | Lay Bee | 1300 | 1800 |
+| Tuesday | 19/11/2024 | Denise | 0900 | 1800 |
+
+Notes:
+
+- Each row represents the availability of one staff member for one day.
+- Times must be entered in `HHMM` format.
+- If a staff member is unavailable on a particular day, simply omit that row.
+- Multiple rows may be used for the same staff member on the same day if they have more than one working period.
 
 ## How to run the planner
 

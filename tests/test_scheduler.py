@@ -7,16 +7,22 @@ from planner.queue import Queue
 from planner.scheduler import Scheduler
 
 
-def test_scheduler_add_to_queue_for_slot_adds_staff_members():
+def test_scheduler_add_to_queue_adds_staff_members():
     scheduler = object.__new__(Scheduler)
     queue = Queue()
-    slot_list = [["Monday", "AM", " Alice ", "Bob", pd.NA]]
 
-    scheduler._add_to_queue_for_slot(queue, slot_list, "0900", "1200")
+    staff_list = [
+        ["Monday", "AM", " Alice ", 900, 1200],
+        ["Monday", "AM", "Bob", 1000, 1400],
+    ]
+
+    scheduler._add_to_queue(queue, staff_list)
 
     names = [person.get_name() for person in queue.get_list()]
     assert names == ["Alice", "Bob"]
+
     assert queue.get_list()[0].check_availability("Monday_AM", "0900", "1200")
+    assert queue.get_list()[1].check_availability("Monday_AM", "1000", "1400")
 
 
 def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
@@ -45,27 +51,31 @@ def test_scheduler_assign_staff_to_duty_raises_when_no_staff_available():
 
 def test_scheduler_get_staff_availability_reads_excel(tmp_path):
     file_path = tmp_path / "availability.xlsx"
-    writer = pd.ExcelWriter(file_path, engine="openpyxl")
-    pd.DataFrame([["Monday", "AM", "Alice"]], columns=["Day", "Session", "Name"]).to_excel(
-        writer, sheet_name="Teachers_AM", index=False
-    )
-    pd.DataFrame([["Tuesday", "PM", "Bob"]], columns=["Day", "Session", "Name"]).to_excel(
-        writer, sheet_name="Teachers_PM", index=False
-    )
-    pd.DataFrame([["Wednesday", "AM", "Carol"]], columns=["Day", "Session", "Name"]).to_excel(
-        writer, sheet_name="Temps_AM", index=False
-    )
-    pd.DataFrame([["Thursday", "PM", "Dave"]], columns=["Day", "Session", "Name"]).to_excel(
-        writer, sheet_name="Temps_PM", index=False
-    )
-    writer.save()
+    with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+        pd.DataFrame(
+            [
+                ["Monday", "AM", "Alice"],
+                ["Tuesday", "PM", "Bob"],
+            ],
+            columns=["Day", "Session", "Name"],
+        ).to_excel(writer, sheet_name="Teachers", index=False)
 
+        pd.DataFrame(
+            [
+                ["Wednesday", "AM", "Carol"],
+                ["Thursday", "PM", "Dave"],
+            ],
+            columns=["Day", "Session", "Name"],
+        ).to_excel(writer, sheet_name="Temps", index=False)
     result = Scheduler._get_staff_availability(str(file_path))
-    assert len(result) == 4
-    assert result[0][0][0] == "Monday"
-    assert result[1][0][0] == "Tuesday"
-    assert result[2][0][0] == "Wednesday"
-    assert result[3][0][0] == "Thursday"
+    assert len(result) == 2
+    teachers, temps = result
+    assert len(teachers) == 2
+    assert len(temps) == 2
+    assert teachers[0] == ["Monday", "AM", "Alice"]
+    assert teachers[1] == ["Tuesday", "PM", "Bob"]
+    assert temps[0] == ["Wednesday", "AM", "Carol"]
+    assert temps[1] == ["Thursday", "PM", "Dave"]
 
 
 def test_scheduler_get_duties_list_from_excel_populates_duty_roster(tmp_path):
