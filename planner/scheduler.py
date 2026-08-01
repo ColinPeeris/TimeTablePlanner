@@ -1,10 +1,18 @@
 import copy
 from typing import List, Tuple
+from enum import Enum
 
 import pandas as pd
 
 from .duty_roster import DutyRoster
 from .queue import Queue
+from .staff_attributes import StaffAttributes
+
+
+class StaffPreference(Enum):
+    TEACHER_FIRST = "Teacher First"
+    TEMP_FIRST = "Temp First"
+    NO_PREFERENCE = "No Preference"
 
 
 class Scheduler:
@@ -37,11 +45,13 @@ class Scheduler:
           - optimize assignment over multiple candidate schedules
           - write the selected roster and distribution to Excel
         """
+        self._staff_attributes = StaffAttributes()
+        self._get_staff_attributes_from_excel(
+            "StaffAttributes.xlsx"
+        )
+
         teachers_list, temps_list = self._get_staff_availability("AvailabilityList.xlsx")
         self._duty_roster = DutyRoster()
-        for slot in teachers_list:
-            day = f"{slot[0]}_{str(slot[1]).replace(' ', '_')}"
-            self._duty_roster.add_day(day)
         self._get_duties_list_from_excel("DutiesBreakdown.xlsx")
         teacher_list = Queue()
         temp_list = Queue()
@@ -53,6 +63,37 @@ class Scheduler:
             temp_list
         )
         self._write_roster_to_excel(best_schedule, finalized_teacher_list, finalized_temp_list)
+
+    def _get_staff_attributes_from_excel(self, file_name):
+        """Load staff required and restricted functions from Excel into StaffAttributes.
+
+        Args:
+            file_name (str): Path to the StaffAttributes Excel workbook.
+        """
+        df_required = pd.read_excel(
+            file_name,
+            sheet_name="Special Functions"
+        )
+        for staff_name, function in zip(
+            df_required["Staff Name"],
+            df_required["Special Function"]):
+
+            self._staff_attributes.add_required_function(
+                staff_name.strip(),
+                function.strip()
+            )
+        df_restricted = pd.read_excel(
+            file_name,
+            sheet_name="Restrictions"
+        )
+        for staff_name, restriction in zip(
+                df_restricted["Staff Name"],
+                df_restricted["Restrictions"]):
+
+            self._staff_attributes.add_restricted_function(
+                staff_name.strip(),
+                restriction.strip()
+            )
 
     def _add_to_queue(self, queue, staff_list):
         for row in staff_list:
@@ -128,24 +169,106 @@ class Scheduler:
             - If `ideal_case` is True, a single assignment is attempted and the method returns early.
             - If `ideal_case` is False and no staff is available, a ValueError is raised.
         """
-        for _ in range(required_count):
-            selected_teacher = teacher_list.select_available_person(
-                day, duty_info["start_time"], duty_info["end_time"]
+        preference = duty_info.get(
+            "staff_preference",
+            StaffPreference.NO_PREFERENCE.value
+        )
+        if preference is None or (isinstance(preference, float) and pd.isna(preference)):
+            preference = StaffPreference.NO_PREFERENCE.value
+
+        required_function = duty_info.get("required_function")
+        restricted_function = duty_info.get("restricted_function")
+
+        # Define a filter function to check if a person meets the required and restricted function criteria.
+        person_filter = lambda person: (
+            self._staff_attributes.has_required_function(
+                person.get_name(),
+                required_function
             )
+            and
+            not self._staff_attributes.has_restriction(
+                person.get_name(),
+                restricted_function
+            )
+        )
+
+        for _ in range(required_count):
+            selected_teacher = None
             selected_temp = None
-            if selected_teacher:
-                duty_info["assignees"].append(selected_teacher)
-            else:
+            if preference == StaffPreference.TEACHER_FIRST.value:
+                selected_teacher = teacher_list.select_available_person(
+                    day,
+                    duty_info["start_time"],
+                    duty_info["end_time"],
+                    person_filter=person_filter
+                )
+                if selected_teacher:
+                    duty_info["assignees"].append(selected_teacher)
+                else:
+                    # If no teacher is available, try to assign a temp
+                    selected_temp = temp_list.select_available_person(
+                        day,
+                        duty_info["start_time"],
+                        duty_info["end_time"],
+                        person_filter=person_filter
+                    )
+                    if selected_temp:
+                        duty_info["assignees"].append(selected_temp)
+            elif preference == StaffPreference.TEMP_FIRST.value:
                 selected_temp = temp_list.select_available_person(
-                    day, duty_info["start_time"], duty_info["end_time"]
+                    day,
+                    duty_info["start_time"],
+                    duty_info["end_time"],
+                    person_filter=person_filter
                 )
                 if selected_temp:
                     duty_info["assignees"].append(selected_temp)
+                else:
+                    # If no temp is available, try to assign a teacher
+                    selected_teacher = teacher_list.select_available_person(
+                        day,
+                        duty_info["start_time"],
+                        duty_info["end_time"],
+                        person_filter=person_filter
+                    )
+                    if selected_teacher:
+                        duty_info["assignees"].append(selected_teacher)
+            elif preference == StaffPreference.NO_PREFERENCE.value:
+                # If no preference is specified, select the staff member with the lowest workload ratio
+                selected_teacher = teacher_list.select_available_person(
+                    day,
+                    duty_info["start_time"],
+                    duty_info["end_time"],
+                    person_filter=person_filter
+                )
+                selected_temp = temp_list.select_available_person(
+                    day,
+                    duty_info["start_time"],
+                    duty_info["end_time"],
+                    person_filter=person_filter
+                )
+                if selected_teacher and selected_temp:
+                    if (
+                        selected_teacher.get_work_capacity_ratio()
+                        <= selected_temp.get_work_capacity_ratio()
+                    ):
+                        duty_info["assignees"].append(selected_teacher)
+                    else:
+                        duty_info["assignees"].append(selected_temp)
+                elif selected_teacher:
+                    duty_info["assignees"].append(selected_teacher)
+                elif selected_temp:
+                    duty_info["assignees"].append(selected_temp)
+            else:
+                raise ValueError(f"Unknown staff preference: {preference}")
+
             if ideal_case:
                 return
+
             if not selected_teacher and not selected_temp:
                 raise ValueError(
-                    f"Unable to find sufficient staff for {duty_info['start_time']} to {duty_info['end_time']} on {day}"
+                    f"Unable to find sufficient staff for "
+                    f"{duty_info['start_time']} to {duty_info['end_time']} on {day}"
                 )
 
     @staticmethod
@@ -236,14 +359,42 @@ class Scheduler:
             Minimum Requirement, and Ideal Case.
         """
         dataframe = pd.read_excel(file_name)
-        for activity, session, start_time, end_time, min_requirement, ideal_case in zip(
-                dataframe["Activity"], dataframe["Session"], dataframe["Start Time"], dataframe["End Time"],
-                dataframe["Minimum Requirement"], dataframe["Ideal Case"]):
+        for (
+            day,
+            date,
+            activity,
+            session,
+            start_time,
+            end_time,
+            min_requirement,
+            ideal_case,
+            required_function,
+            restricted_function,
+            staff_preference
+        ) in zip(
+            dataframe["Day"],
+            dataframe["Date"],
+            dataframe["Activity"],
+            dataframe["Session"],
+            dataframe["Start Time"],
+            dataframe["End Time"],
+            dataframe["Minimum Requirement"],
+            dataframe["Ideal Case"],
+            dataframe["Required Function"],
+            dataframe["Restricted Function"],
+            dataframe["Staff Preference"]
+        ):
+            day_key = f"{day}_{str(date).replace(' ', '_')}"
+
             self._duty_roster.add_duty(
+                day=day_key,
                 activity=activity,
                 session=session,
                 start_time=start_time,
                 end_time=end_time,
                 min_requirement=min_requirement,
-                ideal_case=ideal_case
+                ideal_case=ideal_case,
+                required_function=None if pd.isna(required_function) else required_function,
+                restricted_function=None if pd.isna(restricted_function) else restricted_function,
+                staff_preference=staff_preference
             )

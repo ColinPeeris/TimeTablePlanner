@@ -17,11 +17,15 @@ The final schedule is written to `teacher_schedule_with_duties.xlsx`.
 
 ### 1. DutiesBreakdown.xlsx
 
-This file defines the daily activities.
-For now, the planner assumes that every day has the same set of activities.
+This file defines duty assignments for specific days and sessions.
+The planner now reads each spreadsheet row as a day-specific duty definition.
 
 The file must include these columns:
 
+- `Day`
+  - The day of the week (for example: Monday, Tuesday).
+- `Date`
+  - The calendar date for the duty row.
 - `Activity`
   - Name of the duty or task (for example: "Hall Duty", "Bus Supervision").
 - `Session`
@@ -34,6 +38,12 @@ The file must include these columns:
   - The minimum number of staff needed for that duty.
 - `Ideal Case`
   - The ideal number of staff for that duty.
+- `Required Function`
+  - Optional function that the assigned staff must have (for example: "First Aid").
+- `Restricted Function`
+  - Optional function that assigned staff must not have.
+- `Staff Preference`
+  - Optional preference for the assignment order, such as `Teacher First`, `Temp First`, or `No Preference`.
 
 Example row:
 
@@ -65,6 +75,28 @@ The file must include the following columns:
   - The time the staff member starts work, in `HHMM` format (for example: `0900`).
 - `End Time`
   - The time the staff member finishes work, in `HHMM` format (for example: `1400` or `1800`).
+
+### 3. StaffAttributes.xlsx
+
+This file defines special function requirements and restrictions for staff members.
+It must contain two sheets:
+
+- `Special Functions`
+- `Restrictions`
+
+The `Special Functions` sheet should contain:
+
+- `Staff Name`
+  - The name of the staff member.
+- `Special Function`
+  - A required function for that staff member.
+
+The `Restrictions` sheet should contain:
+
+- `Staff Name`
+  - The name of the staff member.
+- `Restrictions`
+  - A function that the staff member must not perform.
 
 Example layout:
 

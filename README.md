@@ -10,9 +10,12 @@ A timetable duty planner for assigning teachers and temps to duties based on ava
   - `queue.py`
   - `duty_roster.py`
   - `scheduler.py`
+  - `staff_attributes.py`
 - `tests/` - unit tests for the planner modules
 
 ## Requirements
+
+The project also requires `StaffAttributes.xlsx` alongside `DutiesBreakdown.xlsx` and `AvailabilityList.xlsx`.
 
 Use the project virtual environment before running commands.
 

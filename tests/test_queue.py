@@ -37,6 +37,38 @@ def test_queue_select_available_person_returns_none_when_no_available_person():
     assert queue.select_available_person("Monday", "0900", "0930") is None
 
 
+def test_queue_select_available_person_honors_person_filter():
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0900", "1000", 0)
+    queue.add_to_queue("Bob", "Monday", "0900", "1000", 0)
+
+    selected = queue.select_available_person(
+        "Monday",
+        "0900",
+        "0930",
+        person_filter=lambda person: person.get_name() == "Bob"
+    )
+
+    assert selected is not None
+    assert selected.get_name() == "Bob"
+    assert queue.get_list()[-1].get_name() == "Bob"
+
+
+def test_queue_select_available_person_respects_filter_exclusion():
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0900", "1000", 0)
+    queue.add_to_queue("Bob", "Monday", "0900", "1000", 0)
+
+    selected = queue.select_available_person(
+        "Monday",
+        "0900",
+        "0930",
+        person_filter=lambda person: False
+    )
+
+    assert selected is None
+
+
 def test_queue_get_list_returns_internal_queue():
     queue = Queue()
     queue.add_to_queue("Alice", "Monday", "0900", "1000", 0)

@@ -1,6 +1,6 @@
 import math
 from random import shuffle
-from typing import List, Optional
+from typing import List, Optional, Callable
 
 from .person import Person
 
@@ -29,17 +29,51 @@ class Queue:
         person_to_add.set_availability(day=day, start_time=start_time, end_time=end_time, status=status)
         self._queue.append(person_to_add)
 
-    def select_available_person(self, day: str, start_time: str, end_time: str) -> Optional[Person]:
+    def select_available_person(
+        self,
+        day: str,
+        start_time: str,
+        end_time: str,
+        person_filter: Optional[Callable[[Person], bool]] = None
+    ) -> Optional[Person]:
+        """Select the first available person who matches optional filter criteria.
+
+        The selected person is marked as assigned for the given time range and moved
+        to the back of the queue to preserve fairness.
+
+        Args:
+            day (str): Normalized day identifier for the assignment.
+            start_time (str): Assignment start time in HHMM format.
+            end_time (str): Assignment end time in HHMM format.
+            person_filter (callable, optional): A predicate that must return True for a valid person.
+
+        Returns:
+            Optional[Person]: The selected Person instance, or None when no match is found.
+        """
         selected_index = None
+
+        # Iterate through the queue to find the first available person who meets the criteria.
         for idx, person in enumerate(self._queue):
-            if person.check_availability(day=day, start_time=start_time, end_time=end_time):
-                selected_index = idx
-                break
+            # Check if the person is available for the given day and time range. If not, skip to the next person.
+            if not person.check_availability(day=day, start_time=start_time, end_time=end_time):
+                continue
+            # If a person_filter is provided, apply it to the person. If the filter returns False, skip this person.
+            if person_filter is not None and not person_filter(person):
+                continue
+            selected_index = idx
+            break
+
         if selected_index is not None:
-            self._queue[selected_index].set_availability(day=day, start_time=start_time, end_time=end_time, status=1)
+            self._queue[selected_index].set_availability(
+                day=day,
+                start_time=start_time,
+                end_time=end_time,
+                status=1
+            )
             selected_person = self._queue.pop(selected_index)
             self._queue.append(selected_person)
             return selected_person
+
         return None
 
     def get_list(self) -> List[Person]:
