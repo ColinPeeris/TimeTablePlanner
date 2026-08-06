@@ -1,5 +1,6 @@
 from .utils.constants import (
     DUTY_ASSIGNEES,
+    DUTY_CLASS,
     DUTY_DURATION,
     DUTY_END_TIME,
     DUTY_IDEAL_CASE,
@@ -76,11 +77,12 @@ class DutyRoster:
         self,
         day,
         activity,
-        session,
-        start_time,
-        end_time,
-        min_requirement,
-        ideal_case,
+        class_name=None,
+        session=None,
+        start_time=None,
+        end_time=None,
+        min_requirement=0,
+        ideal_case=0,
         required_function=None,
         restricted_function=None,
         staff_preference=None
@@ -90,6 +92,7 @@ class DutyRoster:
         Args:
             day (str): The day key for the duty roster entry (e.g. "Monday_AM").
             activity (str): The duty name or activity label.
+            class_name (str): The class name for the duty.
             session (str): The shift/session label (e.g. "AM" or "PM").
             start_time (str): Start time in HHMM format.
             end_time (str): End time in HHMM format.
@@ -103,10 +106,11 @@ class DutyRoster:
             self._add_day(day)
         print(f'Adding duty: {activity} on {day} from {start_time} to {end_time}')
         self._duty_roster[day][activity] = {
+            DUTY_CLASS: class_name if class_name is not None else "",
             DUTY_SESSION: session,
             DUTY_START_TIME: start_time,
             DUTY_END_TIME: end_time,
-            DUTY_DURATION: self.calculate_duration(start_time=start_time, end_time=end_time),
+            DUTY_DURATION: self.calculate_duration(start_time=start_time, end_time=end_time) if start_time and end_time else 0,
             DUTY_MIN_REQUIREMENT: min_requirement,
             DUTY_IDEAL_CASE: ideal_case,
             DUTY_REQUIRED_FUNCTION: required_function,

@@ -2,6 +2,7 @@ from typing import List
 
 import numpy as np
 from dataclasses import dataclass
+from .utils.constants import DUTY_END_TIME, DUTY_START_TIME
 
 @dataclass(frozen=True)
 class ScheduleConfig:
@@ -56,6 +57,8 @@ class Person:
         self._config = config
         self._availability_by_hour = {}
         self._days_assigned = []
+        self._duties_by_day = {}
+
         self._base_start_minutes = self._config.start_minutes
         self._slot_minutes = self._config.slot_minutes
 
@@ -136,12 +139,22 @@ class Person:
         return float(total_filled_slots) / (total_filled_slots + total_free_slots) \
             if (total_filled_slots + total_free_slots) > 0 else 0.0
 
-    def get_hours_worked(self) -> float:
-        """Return the total hours the person is scheduled to work."""
-        total_filled_slots = 0
-        for day in self._availability_by_hour:
-            total_filled_slots += self._availability_by_hour[day].count(1)
-        return float(total_filled_slots) / 2
+    def get_hours_worked(self):
+        return sum(self.get_hours_worked_by_day().values())
+
+    def get_hours_worked_by_day(self):
+        """Return a dictionary of hours worked per day."""
+        hours = {}
+        for day, slots in self._availability_by_hour.items():
+            hours[day] = slots.count(1) * self._slot_minutes / 60
+        return hours
+
+    def get_rest_periods_by_day(self):
+        """Return a dictionary of rest periods per day."""
+        rest_periods = {}
+        for day, slots in self._availability_by_hour.items():
+            rest_periods[day] = slots.count(0) * self._slot_minutes / 60
+        return rest_periods
 
     def get_hours_in_school(self) -> float:
         """Return the total hours the person is present in school, including free slots."""
@@ -182,6 +195,138 @@ class Person:
             return False
         return (np.asarray(self._availability_by_hour[day][start_index:end_index]) == 0).all()
 
-    def add_duty(self, day: str) -> None:
-        """Register a duty assignment day for the person."""
-        self._days_assigned.append(day)
+    def add_duty(self, day, duty_name=None, duty_info: dict = None):
+
+        # Backwards-compatible behaviour: if only `day` is provided,
+        # treat this as adding the day to the assigned days list.
+        if duty_name is None:
+            if day not in self._days_assigned:
+                self._days_assigned.append(day)
+            return
+
+        if duty_info is None:
+            duty_info = {}
+
+        if day not in self._duties_by_day:
+            self._duties_by_day[day] = []
+
+        self._duties_by_day[day].append(
+            {
+                "name": duty_name,
+                **duty_info,
+            }
+        )
+
+    def get_duties(self, day: str):
+        """
+        Return all duties assigned on a particular day.
+        """
+        return self._duties_by_day.get(day, [])
+
+
+    def get_activity_at(self, day: str, time: str) -> str:
+        """
+        Return what the person is doing at a given time.
+
+        Returns one of:
+            Duty name
+            "Rest"
+            ""
+        """
+
+        slot = self.time_to_index(
+            time,
+            self._base_start_minutes,
+            self._slot_minutes,
+        )
+
+        if day not in self._availability_by_hour:
+            return ""
+
+        availability = self._availability_by_hour[day]
+
+        if slot >= len(availability):
+            return ""
+
+        status = availability[slot]
+
+        if status == -1:
+            return ""
+
+        if status == 0:
+            return "Rest"
+
+        for duty in self.get_duties(day):
+
+            start = self.time_to_index(
+                duty[DUTY_START_TIME],
+                self._base_start_minutes,
+                self._slot_minutes,
+            )
+
+            end = self.time_to_index(
+                duty[DUTY_END_TIME],
+                self._base_start_minutes,
+                self._slot_minutes,
+            )
+
+            if start <= slot < end:
+                return duty["name"]
+
+        return "Duty"
+
+    def build_daily_schedule(self, day: str):
+        """
+        Build a half-hour schedule for the specified day.
+
+        Returns:
+            list[dict]
+        """
+
+        schedule = []
+
+        availability = self.get_availability(day)
+
+        for slot, status in enumerate(availability):
+
+            minutes = self._base_start_minutes + slot * self._slot_minutes
+
+            hh = minutes // 60
+            mm = minutes % 60
+
+            start_time = f"{hh:02}{mm:02}"
+
+            minutes += self._slot_minutes
+
+            hh = minutes // 60
+            mm = minutes % 60
+
+            end_time = f"{hh:02}{mm:02}"
+
+            activity = ""
+
+            if status == -1:
+                activity = ""
+
+            elif status == 0:
+                activity = "Rest"
+
+            else:
+                activity = "Duty"
+
+                for duty in self.get_duties(day):
+
+                    if (
+                        duty[DUTY_START_TIME] <= start_time
+                        and duty[DUTY_END_TIME] > start_time
+                    ):
+                        activity = duty["name"]
+                        break
+
+            schedule.append({
+                "start": start_time,
+                "end": end_time,
+                "activity": activity,
+            })
+
+        return schedule

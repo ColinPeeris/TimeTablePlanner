@@ -1,5 +1,6 @@
 # Shared duty metadata keys used across planner modules.
 DUTY_SESSION = "session"
+DUTY_CLASS = "class_name"
 DUTY_START_TIME = "start_time"
 DUTY_END_TIME = "end_time"
 DUTY_DURATION = "duration"

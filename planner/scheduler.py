@@ -19,6 +19,7 @@ from .utils.constants import (
     DUTY_START_TIME,
     DUTY_STAFF_PREFERENCE,
 )
+from report_generator import ReportGenerator
 
 
 class StaffPreference(Enum):
@@ -74,7 +75,12 @@ class Scheduler:
             teacher_list,
             temp_list
         )
-        self._write_roster_to_excel(best_schedule, finalized_teacher_list, finalized_temp_list)
+        self._write_roster_to_excel_2(best_schedule, finalized_teacher_list, finalized_temp_list)
+        ReportGenerator(
+            best_schedule,
+            finalized_teacher_list,
+            finalized_temp_list,
+        ).generate()
 
     def _get_staff_attributes_from_excel(self, file_name):
         """Load staff required and restricted functions from Excel into StaffAttributes.
@@ -199,7 +205,7 @@ class Scheduler:
 
         Args:
             day (str): Normalized day identifier for the duty (e.g. "Monday_AM").
-            duty_info (dict): Duty metadata including start_time, end_time, assignees, min_requirement, and ideal_case.
+            duty_info (dict): Duty metadata including class_name, start_time, end_time, assignees, min_requirement, and ideal_case.
             teacher_list (Queue): Queue of available teachers.
             temp_list (Queue): Queue of available temps.
             required_count (int): Number of staff to assign for this pass.
@@ -245,6 +251,11 @@ class Scheduler:
                 )
                 if selected_teacher:
                     duty_info[DUTY_ASSIGNEES].append(selected_teacher)
+                    selected_teacher.add_duty(
+                        day,
+                        duty_name,
+                        duty_info
+                    )
                 else:
                     # If no teacher is available, try to assign a temp
                     selected_temp = temp_list.select_available_person(
@@ -255,6 +266,11 @@ class Scheduler:
                     )
                     if selected_temp:
                         duty_info[DUTY_ASSIGNEES].append(selected_temp)
+                        selected_temp.add_duty(
+                            day,
+                            duty_name,
+                            duty_info
+                        )
             elif preference == StaffPreference.TEMP_FIRST.value:
                 selected_temp = temp_list.select_available_person(
                     day,
@@ -264,6 +280,11 @@ class Scheduler:
                 )
                 if selected_temp:
                     duty_info[DUTY_ASSIGNEES].append(selected_temp)
+                    selected_temp.add_duty(
+                        day,
+                        duty_name,
+                        duty_info
+                    )
                 else:
                     # If no temp is available, try to assign a teacher
                     selected_teacher = teacher_list.select_available_person(
@@ -274,6 +295,11 @@ class Scheduler:
                     )
                     if selected_teacher:
                         duty_info[DUTY_ASSIGNEES].append(selected_teacher)
+                        selected_teacher.add_duty(
+                            day,
+                            duty_name,
+                            duty_info
+                        )
             elif preference == StaffPreference.NO_PREFERENCE.value:
                 # If no preference is specified, select the staff member with the lowest workload ratio
                 selected_teacher = teacher_list.select_available_person(
@@ -294,12 +320,32 @@ class Scheduler:
                         <= selected_temp.get_work_capacity_ratio()
                     ):
                         duty_info[DUTY_ASSIGNEES].append(selected_teacher)
+                        selected_teacher.add_duty(
+                            day,
+                            duty_name,
+                            duty_info
+                        )
                     else:
                         duty_info[DUTY_ASSIGNEES].append(selected_temp)
+                        selected_temp.add_duty(
+                            day,
+                            duty_name,
+                            duty_info
+                        )
                 elif selected_teacher:
                     duty_info[DUTY_ASSIGNEES].append(selected_teacher)
+                    selected_teacher.add_duty(
+                        day,
+                        duty_name,
+                        duty_info
+                    )
                 elif selected_temp:
                     duty_info[DUTY_ASSIGNEES].append(selected_temp)
+                    selected_temp.add_duty(
+                        day,
+                        duty_name,
+                        duty_info
+                    )
             else:
                 raise ValueError(f"Unknown staff preference: {preference}")
 
@@ -406,6 +452,174 @@ class Scheduler:
         print("Data has been written to teacher_schedule_with_duties.xlsx")
 
     @staticmethod
+    def _write_roster_to_excel_2(
+        roster: dict,
+        finalized_teacher_list: Queue,
+        finalized_temp_list: Queue,
+    ) -> None:
+
+        import pandas as pd
+
+        ###############################################################
+        # Build Duty Roster sheet
+        ###############################################################
+
+        roster_rows = []
+
+        for day in sorted(roster.keys()):
+
+            duties = sorted(
+                roster[day].items(),
+                key=lambda x: x[1][DUTY_START_TIME]
+            )
+
+            for duty_name, duty_info in duties:
+
+                teachers = [
+                    p.get_name()
+                    for p in duty_info[DUTY_ASSIGNEES]
+                ]
+
+                teachers += [""] * (6 - len(teachers))
+
+                start = duty_info[DUTY_START_TIME]
+                end = duty_info[DUTY_END_TIME]
+
+                duration = (
+                    Person.time_to_index(end)
+                    - Person.time_to_index(start)
+                ) * 0.5
+
+                roster_rows.append([
+                    day,
+                    start,
+                    end,
+                    duration,
+                    duty_name,
+                    *teachers
+                ])
+
+        df_roster = pd.DataFrame(
+            roster_rows,
+            columns=[
+                "Day",
+                "Start",
+                "End",
+                "Hours",
+                "Duty",
+                "Teacher 1",
+                "Teacher 2",
+                "Teacher 3",
+                "Teacher 4",
+                "Teacher 5",
+                "Teacher 6",
+            ],
+        )
+
+        ###############################################################
+        # Build Work Distribution sheet
+        ###############################################################
+
+        people_rows = []
+
+        people = (
+            finalized_teacher_list.get_list()
+            + finalized_temp_list.get_list()
+        )
+
+        all_days = sorted(roster.keys())
+
+        for person in people:
+
+            worked = person.get_hours_worked_by_day()
+            rests = person.get_rest_periods_by_day()
+
+            row = {
+                "Person": person.get_name(),
+                "Capacity": round(person.get_work_capacity_ratio(), 2),
+                "Hours Worked": person.get_hours_worked(),
+                "Hours In School": person.get_hours_in_school(),
+            }
+
+            total_rest = 0
+
+            for day in all_days:
+
+                work = worked.get(day, 0)
+                rest = rests.get(day, 0)
+
+                row[f"{day} Work"] = work
+                row[f"{day} Rest"] = rest
+
+                total_rest += rest
+
+            row["Total Rest"] = total_rest
+
+            people_rows.append(row)
+
+        df_summary = pd.DataFrame(people_rows)
+
+        ###############################################################
+        # Write workbook
+        ###############################################################
+
+        with pd.ExcelWriter(
+            "teacher_schedule_with_duties.xlsx",
+            engine="xlsxwriter",
+        ) as writer:
+
+            df_roster.to_excel(
+                writer,
+                sheet_name="Duty Roster",
+                index=False,
+            )
+
+            df_summary.to_excel(
+                writer,
+                sheet_name="Work Distribution",
+                index=False,
+            )
+
+            workbook = writer.book
+
+            header_format = workbook.add_format({
+                "bold": True,
+                "bg_color": "#D9EAD3",
+                "border": 1,
+                "align": "center",
+            })
+
+            centre_format = workbook.add_format({
+                "align": "center",
+            })
+
+            for sheet_name, dataframe in {
+                "Duty Roster": df_roster,
+                "Work Distribution": df_summary,
+            }.items():
+
+                worksheet = writer.sheets[sheet_name]
+
+                worksheet.freeze_panes(1, 0)
+
+                for col_num, value in enumerate(dataframe.columns):
+                    worksheet.write(0, col_num, value, header_format)
+
+                    width = max(
+                        len(str(value)),
+                        dataframe.iloc[:, col_num].astype(str).map(len).max()
+                    ) + 2
+
+                    worksheet.set_column(
+                        col_num,
+                        col_num,
+                        width,
+                        centre_format,
+                    )
+
+        print("Data has been written to teacher_schedule_with_duties.xlsx")
+
+    @staticmethod
     def _get_staff_availability(file_name: str) -> Tuple[List, List]:
         """
         Load staff availability from an Excel file with two sheets: "Teachers" and "Temps".
@@ -437,10 +651,12 @@ class Scheduler:
             Minimum Requirement, and Ideal Case.
         """
         dataframe = pd.read_excel(file_name)
+        class_col = dataframe["Class"] if "Class" in dataframe.columns else [""] * len(dataframe)
         for (
             day,
             date,
             activity,
+            class_name,
             session,
             start_time,
             end_time,
@@ -453,6 +669,7 @@ class Scheduler:
             dataframe["Day"],
             dataframe["Date"],
             dataframe["Activity"],
+            class_col,
             dataframe["Session"],
             dataframe["Start Time"],
             dataframe["End Time"],
@@ -469,6 +686,7 @@ class Scheduler:
             self._duty_roster.add_duty(
                 day=day_key,
                 activity=activity,
+                class_name=class_name,
                 session=session,
                 start_time=normalized_start_time,
                 end_time=normalized_end_time,
