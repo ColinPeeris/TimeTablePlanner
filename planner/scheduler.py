@@ -19,6 +19,13 @@ from .utils.constants import (
     DUTY_START_TIME,
     DUTY_STAFF_PREFERENCE,
 )
+from .utils.configs import (
+    FAIRNESS_MODE,
+    VALID_FAIRNESS_MODES,
+    LUNCH_BREAK_START,
+    LUNCH_BREAK_END,
+    LUNCH_BREAK_MIN_REST_SLOTS,
+)
 from report_generator import ReportGenerator
 
 
@@ -46,7 +53,7 @@ class Scheduler:
     `_write_roster_to_excel`.
     """
 
-    def __init__(self):
+    def __init__(self, fairness_mode: str = None):
         """
         Initialize the Scheduler and execute the duty planning workflow.
 
@@ -63,6 +70,21 @@ class Scheduler:
             "StaffAttributes.xlsx"
         )
 
+        # Fairness mode controls how fairness is evaluated during optimization.
+        # Supported values:
+        #  - 'week'    : original behaviour, minimize weekly stddev (teachers+temps)
+        #  - 'day_sum' : minimize sum of daily stddevs across the week
+        #  - 'day_max' : minimize the worst-day stddev (minimax)
+        if fairness_mode is None:
+            fairness_mode = FAIRNESS_MODE
+        if fairness_mode not in VALID_FAIRNESS_MODES:
+            raise ValueError(f"Unknown fairness mode: {fairness_mode}")
+        self._fairness_mode = fairness_mode
+
+        self._lunch_break_start = LUNCH_BREAK_START
+        self._lunch_break_end = LUNCH_BREAK_END
+        self._lunch_break_min_rest_slots = LUNCH_BREAK_MIN_REST_SLOTS
+
         teachers_list, temps_list = self._get_staff_availability("AvailabilityList.xlsx")
         self._duty_roster = DutyRoster()
         self._get_duties_list_from_excel("DutiesBreakdown.xlsx")
@@ -75,6 +97,11 @@ class Scheduler:
             teacher_list,
             temp_list
         )
+        if best_schedule is None:
+            raise ValueError(
+                "Unable to find a valid roster that satisfies the configured lunch-break "
+                "requirements. Please verify the lunch-break window and minimum rest slots."
+            )
         self._write_roster_to_excel_2(best_schedule, finalized_teacher_list, finalized_temp_list)
         ReportGenerator(
             best_schedule,
@@ -156,8 +183,8 @@ class Scheduler:
         Generate and evaluate candidate duty assignments to find the best distribution.
 
         This method performs a fixed number of iterations, each time shuffling the teacher and temp queues,
-        assigning staff to every duty slot, and computing the combined standard deviation of workload ratios.
-        The lowest-scoring assignment is retained and returned.
+        assigning staff to every duty slot, and computing the selected fairness metric.
+        The lowest-scoring valid assignment is retained and returned.
 
         Args:
             teacher_list (Queue): Queue of available teachers.
@@ -166,7 +193,7 @@ class Scheduler:
         Returns:
             tuple: (best_roster, best_teacher_list, best_temp_list)
         """
-        min_std_deviation = float("inf")
+        min_metric = float("inf")
         finalized_teacher_list = None
         finalized_temp_list = None
         final_roster = None
@@ -191,13 +218,82 @@ class Scheduler:
                             ideal_case=True,
                             duties_for_day=duty_roster[day],
                             duty_name=duty_name)
-            sum_of_std_deviation = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
-            if sum_of_std_deviation < min_std_deviation:
-                min_std_deviation = sum_of_std_deviation
+
+            # Enforce any configured post-assignment checks before evaluating fairness.
+            if not self._lunch_provider_satisfied(_teacher_list, duty_roster):
+                continue
+
+            # Choose fairness metric according to configuration
+            combined_people = _teacher_list.get_list() + _temp_list.get_list()
+            days = sorted(duty_roster.keys())
+
+            if self._fairness_mode == "week":
+                # Original behaviour: combined std deviation for teachers + temps
+                metric = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
+
+            else:
+                # Compute daily std deviations across combined_people for each day
+                import math
+
+                daily_stds = []
+                for day_key in days:
+                    values = [p.get_hours_worked_by_day().get(day_key, 0) for p in combined_people]
+                    if not values:
+                        daily_stds.append(0.0)
+                        continue
+                    mean = sum(values) / len(values)
+                    var = sum((v - mean) ** 2 for v in values) / len(values)
+                    daily_stds.append(math.sqrt(var))
+
+                if self._fairness_mode == "day_sum":
+                    metric = sum(daily_stds)
+                elif self._fairness_mode == "day_max":
+                    metric = max(daily_stds) if daily_stds else 0.0
+                else:
+                    raise ValueError(f"Unknown fairness_mode: {self._fairness_mode}")
+
+            if metric < min_metric:
+                min_metric = metric
                 finalized_teacher_list = copy.deepcopy(_teacher_list)
                 finalized_temp_list = copy.deepcopy(_temp_list)
                 final_roster = duty_roster
         return final_roster, finalized_teacher_list, finalized_temp_list
+
+    def _lunch_provider_satisfied(self, teacher_list, duty_roster):
+        """Validate that teachers receive the configured minimum rest slots in the lunch window."""
+        for teacher in teacher_list.get_list():
+            for day_key in sorted(duty_roster.keys()):
+                if not self._is_lunch_window_applicable(teacher, day_key):
+                    continue
+                rest_slots = self._count_rest_slots_during_window(
+                    teacher,
+                    day_key,
+                    self._lunch_break_start,
+                    self._lunch_break_end,
+                )
+                if rest_slots < self._lunch_break_min_rest_slots:
+                    return False
+        return True
+
+    @staticmethod
+    def _is_lunch_window_applicable(person, day_key):
+        availability = person.get_availability(day_key)
+        if not availability:
+            return False
+        return any(status in (0, 1) for status in availability)
+
+    @staticmethod
+    def _count_rest_slots_during_window(person, day_key, start_time, end_time):
+        availability = person.get_availability(day_key)
+        if not availability:
+            return 0
+        start_index = Person.time_to_index(start_time, person._base_start_minutes, person._slot_minutes)
+        end_index = Person.time_to_index(end_time, person._base_start_minutes, person._slot_minutes)
+        start_index = max(start_index, 0)
+        end_index = min(end_index, len(availability))
+        if start_index >= end_index:
+            return 0
+        return sum(1 for status in availability[start_index:end_index] if status == 0)
 
     def _assign_staff_to_duty(self, day, duty_info, teacher_list, temp_list, required_count, ideal_case: bool, duties_for_day=None, duty_name=None):
         """
