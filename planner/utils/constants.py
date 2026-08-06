@@ -1,0 +1,11 @@
+# Shared duty metadata keys used across planner modules.
+DUTY_SESSION = "session"
+DUTY_START_TIME = "start_time"
+DUTY_END_TIME = "end_time"
+DUTY_DURATION = "duration"
+DUTY_MIN_REQUIREMENT = "min_requirement"
+DUTY_IDEAL_CASE = "ideal_case"
+DUTY_REQUIRED_FUNCTION = "required_function"
+DUTY_RESTRICTED_FUNCTION = "restricted_function"
+DUTY_STAFF_PREFERENCE = "staff_preference"
+DUTY_ASSIGNEES = "assignees"

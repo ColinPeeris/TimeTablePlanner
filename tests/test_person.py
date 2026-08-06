@@ -35,6 +35,16 @@ def test_person_set_availability_initializes_and_updates_slots():
     assert availability[3] == 1
 
 
+def test_person_set_availability_expands_schedule_for_early_start():
+    person = Person("Alice")
+    person.set_availability("Monday", "0800", "1700", 0)
+
+    availability = person.get_availability("Monday")
+    assert len(availability) == 20
+    assert availability[:18] == [0] * 18
+    assert availability[18:] == [-1] * 2
+
+
 def test_person_check_availability_true_for_available_range():
     person = Person("Alice")
     person.set_availability("Monday", "0900", "1100", 0)

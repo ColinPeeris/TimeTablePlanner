@@ -5,8 +5,20 @@ from enum import Enum
 import pandas as pd
 
 from .duty_roster import DutyRoster
+from .person import Person
 from .queue import Queue
 from .staff_attributes import StaffAttributes
+from .utils.constants import (
+    DUTY_ASSIGNEES,
+    DUTY_DURATION,
+    DUTY_END_TIME,
+    DUTY_IDEAL_CASE,
+    DUTY_MIN_REQUIREMENT,
+    DUTY_REQUIRED_FUNCTION,
+    DUTY_RESTRICTED_FUNCTION,
+    DUTY_START_TIME,
+    DUTY_STAFF_PREFERENCE,
+)
 
 
 class StaffPreference(Enum):
@@ -96,11 +108,17 @@ class Scheduler:
             )
 
     def _add_to_queue(self, queue, staff_list):
+        """Convert Excel rows into queue entries and normalize time values.
+
+        Args:
+            queue (Queue): The queue to populate with staff availability.
+            staff_list (list): Rows containing day, session, name, start time, and end time.
+        """
         for row in staff_list:
             day = f"{row[0]}_{str(row[1]).replace(' ', '_')}"
             staff_name = row[2].strip()
-            start_time = str(row[3]).zfill(4)
-            end_time = str(row[4]).zfill(4)
+            start_time = str(Person.normalize_time(row[3])).zfill(4)
+            end_time = str(Person.normalize_time(row[4])).zfill(4)
             queue.add_to_queue(
                 staff_member=staff_name,
                 day=day,
@@ -108,6 +126,24 @@ class Scheduler:
                 end_time=end_time,
                 status=0
             )
+
+    @staticmethod
+    def _order_duties_for_assignment(duties):
+        """Return duties ordered by assignment priority.
+
+        Duties requiring special functions or restrictions are assigned first so
+        skilled staff are preserved for constrained assignments.
+        """
+        return sorted(
+            duties.items(),
+            key=lambda item: (
+                0 if item[1].get(DUTY_REQUIRED_FUNCTION) is None else -1,
+                0 if item[1].get(DUTY_RESTRICTED_FUNCTION) is None else -1,
+                -(item[1].get(DUTY_MIN_REQUIREMENT) or 0),
+                -(item[1].get(DUTY_IDEAL_CASE) or 0),
+                -(item[1].get(DUTY_DURATION) or 0),
+            )
+        )
 
     def _optimize_duty_assignment(self, teacher_list, temp_list):
         """
@@ -135,15 +171,20 @@ class Scheduler:
             for day in duty_roster:
                 _teacher_list.shuffle()
                 _temp_list.shuffle()
-                for duty_name, duty_info in duty_roster[day].items():
+                for duty_name, duty_info in self._order_duties_for_assignment(duty_roster[day]):
                     self._assign_staff_to_duty(
-                        day, duty_info, _teacher_list, _temp_list, duty_info["min_requirement"], ideal_case=False)
-                for duty_name, duty_info in duty_roster[day].items():
-                    if duty_info["min_requirement"] < duty_info["ideal_case"]:
+                        day, duty_info, _teacher_list, _temp_list,
+                        duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False,
+                        duties_for_day=duty_roster[day],
+                        duty_name=duty_name)
+                for duty_name, duty_info in self._order_duties_for_assignment(duty_roster[day]):
+                    if duty_info[DUTY_MIN_REQUIREMENT] < duty_info[DUTY_IDEAL_CASE]:
                         self._assign_staff_to_duty(
                             day, duty_info, _teacher_list, _temp_list,
-                            duty_info["ideal_case"] - duty_info["min_requirement"],
-                            ideal_case=True)
+                            duty_info[DUTY_IDEAL_CASE] - duty_info[DUTY_MIN_REQUIREMENT],
+                            ideal_case=True,
+                            duties_for_day=duty_roster[day],
+                            duty_name=duty_name)
             sum_of_std_deviation = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
             if sum_of_std_deviation < min_std_deviation:
                 min_std_deviation = sum_of_std_deviation
@@ -152,7 +193,7 @@ class Scheduler:
                 final_roster = duty_roster
         return final_roster, finalized_teacher_list, finalized_temp_list
 
-    def _assign_staff_to_duty(self, day, duty_info, teacher_list, temp_list, required_count, ideal_case: bool):
+    def _assign_staff_to_duty(self, day, duty_info, teacher_list, temp_list, required_count, ideal_case: bool, duties_for_day=None, duty_name=None):
         """
         Assigns staff to a single duty until the required headcount is reached.
 
@@ -163,6 +204,7 @@ class Scheduler:
             temp_list (Queue): Queue of available temps.
             required_count (int): Number of staff to assign for this pass.
             ideal_case (bool): Whether this assignment is filling optional ideal positions.
+            duty_name (str, optional): Optional duty identifier for error messages.
 
         Notes:
             - Teachers are chosen first, then temps if no teacher is available.
@@ -170,14 +212,14 @@ class Scheduler:
             - If `ideal_case` is False and no staff is available, a ValueError is raised.
         """
         preference = duty_info.get(
-            "staff_preference",
+            DUTY_STAFF_PREFERENCE,
             StaffPreference.NO_PREFERENCE.value
         )
         if preference is None or (isinstance(preference, float) and pd.isna(preference)):
             preference = StaffPreference.NO_PREFERENCE.value
 
-        required_function = duty_info.get("required_function")
-        restricted_function = duty_info.get("restricted_function")
+        required_function = duty_info.get(DUTY_REQUIRED_FUNCTION)
+        restricted_function = duty_info.get(DUTY_RESTRICTED_FUNCTION)
 
         # Define a filter function to check if a person meets the required and restricted function criteria.
         person_filter = lambda person: (
@@ -191,60 +233,59 @@ class Scheduler:
                 restricted_function
             )
         )
-
-        for _ in range(required_count):
+        for _ in range(int(required_count)):
             selected_teacher = None
             selected_temp = None
             if preference == StaffPreference.TEACHER_FIRST.value:
                 selected_teacher = teacher_list.select_available_person(
                     day,
-                    duty_info["start_time"],
-                    duty_info["end_time"],
+                    duty_info[DUTY_START_TIME],
+                    duty_info[DUTY_END_TIME],
                     person_filter=person_filter
                 )
                 if selected_teacher:
-                    duty_info["assignees"].append(selected_teacher)
+                    duty_info[DUTY_ASSIGNEES].append(selected_teacher)
                 else:
                     # If no teacher is available, try to assign a temp
                     selected_temp = temp_list.select_available_person(
                         day,
-                        duty_info["start_time"],
-                        duty_info["end_time"],
+                        duty_info[DUTY_START_TIME],
+                        duty_info[DUTY_END_TIME],
                         person_filter=person_filter
                     )
                     if selected_temp:
-                        duty_info["assignees"].append(selected_temp)
+                        duty_info[DUTY_ASSIGNEES].append(selected_temp)
             elif preference == StaffPreference.TEMP_FIRST.value:
                 selected_temp = temp_list.select_available_person(
                     day,
-                    duty_info["start_time"],
-                    duty_info["end_time"],
+                    duty_info[DUTY_START_TIME],
+                    duty_info[DUTY_END_TIME],
                     person_filter=person_filter
                 )
                 if selected_temp:
-                    duty_info["assignees"].append(selected_temp)
+                    duty_info[DUTY_ASSIGNEES].append(selected_temp)
                 else:
                     # If no temp is available, try to assign a teacher
                     selected_teacher = teacher_list.select_available_person(
                         day,
-                        duty_info["start_time"],
-                        duty_info["end_time"],
+                        duty_info[DUTY_START_TIME],
+                        duty_info[DUTY_END_TIME],
                         person_filter=person_filter
                     )
                     if selected_teacher:
-                        duty_info["assignees"].append(selected_teacher)
+                        duty_info[DUTY_ASSIGNEES].append(selected_teacher)
             elif preference == StaffPreference.NO_PREFERENCE.value:
                 # If no preference is specified, select the staff member with the lowest workload ratio
                 selected_teacher = teacher_list.select_available_person(
                     day,
-                    duty_info["start_time"],
-                    duty_info["end_time"],
+                    duty_info[DUTY_START_TIME],
+                    duty_info[DUTY_END_TIME],
                     person_filter=person_filter
                 )
                 selected_temp = temp_list.select_available_person(
                     day,
-                    duty_info["start_time"],
-                    duty_info["end_time"],
+                    duty_info[DUTY_START_TIME],
+                    duty_info[DUTY_END_TIME],
                     person_filter=person_filter
                 )
                 if selected_teacher and selected_temp:
@@ -252,13 +293,13 @@ class Scheduler:
                         selected_teacher.get_work_capacity_ratio()
                         <= selected_temp.get_work_capacity_ratio()
                     ):
-                        duty_info["assignees"].append(selected_teacher)
+                        duty_info[DUTY_ASSIGNEES].append(selected_teacher)
                     else:
-                        duty_info["assignees"].append(selected_temp)
+                        duty_info[DUTY_ASSIGNEES].append(selected_temp)
                 elif selected_teacher:
-                    duty_info["assignees"].append(selected_teacher)
+                    duty_info[DUTY_ASSIGNEES].append(selected_teacher)
                 elif selected_temp:
-                    duty_info["assignees"].append(selected_temp)
+                    duty_info[DUTY_ASSIGNEES].append(selected_temp)
             else:
                 raise ValueError(f"Unknown staff preference: {preference}")
 
@@ -266,10 +307,47 @@ class Scheduler:
                 return
 
             if not selected_teacher and not selected_temp:
-                raise ValueError(
-                    f"Unable to find sufficient staff for "
-                    f"{duty_info['start_time']} to {duty_info['end_time']} on {day}"
-                )
+                # Build enhanced diagnostic information about overlapping duties and assignees
+                def _to_minutes(hhmm: str) -> int:
+                    try:
+                        hh = int(hhmm[:2])
+                        mm = int(hhmm[2:])
+                        return hh * 60 + mm
+                    except Exception:
+                        return 0
+
+                cur_start = _to_minutes(str(duty_info.get(DUTY_START_TIME)))
+                cur_end = _to_minutes(str(duty_info.get(DUTY_END_TIME)))
+
+                overlaps = []
+                if duties_for_day:
+                    for other_name, other_info in duties_for_day.items():
+                        if other_name == duty_name:
+                            continue
+                        other_start = _to_minutes(str(other_info.get(DUTY_START_TIME)))
+                        other_end = _to_minutes(str(other_info.get(DUTY_END_TIME)))
+                        # overlapping if not (other_end <= cur_start or other_start >= cur_end)
+                        if not (other_end <= cur_start or other_start >= cur_end):
+                            assigned = [a.get_name() for a in other_info.get(DUTY_ASSIGNEES, [])]
+                            overlaps.append((other_name, other_info.get(DUTY_START_TIME), other_info.get(DUTY_END_TIME), assigned))
+
+                assigned_here = [a.get_name() for a in duty_info.get(DUTY_ASSIGNEES, [])]
+
+                msg_lines = [
+                    f"Unable to find sufficient staff for {duty_name} {duty_info[DUTY_START_TIME]} to {duty_info[DUTY_END_TIME]} on {day}",
+                    ""
+                ]
+                if overlaps:
+                    msg_lines.append(f"Overlapping duties ({len(overlaps)}):")
+                    for oname, s, e, assignees in overlaps:
+                        msg_lines.append(f" - {oname} {s} to {e}, assignees: {assignees}")
+                else:
+                    msg_lines.append("No overlapping duties found for this day in provided data.")
+
+                msg_lines.append("")
+                msg_lines.append(f"Already assigned to this duty: {assigned_here}")
+
+                raise ValueError("\n".join(msg_lines))
 
     @staticmethod
     def _write_roster_to_excel(roster: dict, finalized_teacher_list: Queue, finalized_temp_list: Queue) -> None:
@@ -290,7 +368,7 @@ class Scheduler:
         for day in roster:
             teachers_by_day[day] = []
             for duty in roster[day]:
-                assignees = roster[day][duty]["assignees"]
+                assignees = roster[day][duty][DUTY_ASSIGNEES]
                 teachers_for_duty = [assignee.get_name() for assignee in assignees] + ["NA"] * (6 - len(assignees))
                 teachers_by_day[day].append((duty, teachers_for_duty))
         data_for_excel = []
@@ -386,12 +464,14 @@ class Scheduler:
         ):
             day_key = f"{day}_{str(date).replace(' ', '_')}"
 
+            normalized_start_time = str(Person.normalize_time(start_time)).zfill(4)
+            normalized_end_time = str(Person.normalize_time(end_time)).zfill(4)
             self._duty_roster.add_duty(
                 day=day_key,
                 activity=activity,
                 session=session,
-                start_time=start_time,
-                end_time=end_time,
+                start_time=normalized_start_time,
+                end_time=normalized_end_time,
                 min_requirement=min_requirement,
                 ideal_case=ideal_case,
                 required_function=None if pd.isna(required_function) else required_function,

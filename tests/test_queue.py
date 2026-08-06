@@ -19,6 +19,16 @@ def test_queue_add_to_queue_adds_new_person_and_updates_existing():
     assert availability[:2] == [0, 0]
 
 
+def test_queue_add_to_queue_supports_early_start_time():
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0800", "1700", 0)
+
+    availability = queue.get_list()[0].get_availability("Monday")
+    assert len(availability) == 20
+    assert availability[:18] == [0] * 18
+    assert availability[18:] == [-1] * 2
+
+
 def test_queue_select_available_person_selects_and_moves_to_back():
     queue = Queue()
     queue.add_to_queue("Alice", "Monday", "0900", "1000", 0)

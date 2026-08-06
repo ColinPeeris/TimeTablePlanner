@@ -1,3 +1,16 @@
+from .utils.constants import (
+    DUTY_ASSIGNEES,
+    DUTY_DURATION,
+    DUTY_END_TIME,
+    DUTY_IDEAL_CASE,
+    DUTY_MIN_REQUIREMENT,
+    DUTY_REQUIRED_FUNCTION,
+    DUTY_RESTRICTED_FUNCTION,
+    DUTY_SESSION,
+    DUTY_START_TIME,
+    DUTY_STAFF_PREFERENCE,
+)
+
 class DutyRoster:
     """
     A class responsible for managing the duty roster, including adding days and duties.
@@ -8,12 +21,42 @@ class DutyRoster:
 
     @staticmethod
     def calculate_duration(start_time: str, end_time: str) -> float:
-        if isinstance(start_time, int):
-            start_time = str(start_time)
-        if isinstance(end_time, int):
-            end_time = str(end_time)
-        start_time = start_time.zfill(4)
-        end_time = end_time.zfill(4)
+        """Calculate duty duration in hours from HHMM start and end times.
+
+        Args:
+            start_time (str): The start time in HHMM format, or a float/int representing HHMM.
+            end_time (str): The end time in HHMM format, or a float/int representing HHMM.
+
+        Returns:
+            float: The duration of the duty in hours, accounting for overnight spans.
+        """
+        def normalize(time_value):
+            if isinstance(time_value, float):
+                if time_value.is_integer():
+                    time_value = int(time_value)
+                else:
+                    raise ValueError(
+                        f"Time values must be whole minutes in HHMM format, not {time_value}"
+                    )
+            if isinstance(time_value, int):
+                time_value = str(time_value)
+            if isinstance(time_value, str):
+                if "." in time_value:
+                    numeric = float(time_value)
+                    if numeric.is_integer():
+                        time_value = str(int(numeric))
+                    else:
+                        raise ValueError(
+                            f"Time values must be whole minutes in HHMM format, not {time_value}"
+                        )
+                time_value = time_value.zfill(4)
+                return time_value
+            raise TypeError(
+                f"Unsupported time type: {type(time_value).__name__}"
+            )
+
+        start_time = normalize(start_time)
+        end_time = normalize(end_time)
         start_hour = int(start_time[:2])
         start_minute = int(start_time[2:])
         end_hour = int(end_time[:2])
@@ -58,17 +101,18 @@ class DutyRoster:
         """
         if day not in self._duty_roster:
             self._add_day(day)
+        print(f'Adding duty: {activity} on {day} from {start_time} to {end_time}')
         self._duty_roster[day][activity] = {
-            "session": session,
-            "start_time": start_time,
-            "end_time": end_time,
-            "duration": self.calculate_duration(start_time=start_time, end_time=end_time),
-            "min_requirement": min_requirement,
-            "ideal_case": ideal_case,
-            "required_function": required_function,
-            "restricted_function": restricted_function,
-            "staff_preference": staff_preference,
-            "assignees": []
+            DUTY_SESSION: session,
+            DUTY_START_TIME: start_time,
+            DUTY_END_TIME: end_time,
+            DUTY_DURATION: self.calculate_duration(start_time=start_time, end_time=end_time),
+            DUTY_MIN_REQUIREMENT: min_requirement,
+            DUTY_IDEAL_CASE: ideal_case,
+            DUTY_REQUIRED_FUNCTION: required_function,
+            DUTY_RESTRICTED_FUNCTION: restricted_function,
+            DUTY_STAFF_PREFERENCE: staff_preference,
+            DUTY_ASSIGNEES: []
         }
 
     def get_duty_roster(self):

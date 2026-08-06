@@ -6,6 +6,17 @@ from planner.person import Person
 from planner.queue import Queue
 from planner.scheduler import Scheduler
 from planner.staff_attributes import StaffAttributes
+from planner.utils.constants import (
+    DUTY_ASSIGNEES,
+    DUTY_DURATION,
+    DUTY_END_TIME,
+    DUTY_IDEAL_CASE,
+    DUTY_MIN_REQUIREMENT,
+    DUTY_REQUIRED_FUNCTION,
+    DUTY_RESTRICTED_FUNCTION,
+    DUTY_START_TIME,
+    DUTY_STAFF_PREFERENCE,
+)
 
 
 def test_scheduler_add_to_queue_adds_staff_members():
@@ -26,6 +37,22 @@ def test_scheduler_add_to_queue_adds_staff_members():
     assert queue.get_list()[1].check_availability("Monday_AM", "1000", "1400")
 
 
+def test_scheduler_add_to_queue_normalizes_float_times():
+    scheduler = object.__new__(Scheduler)
+    queue = Queue()
+
+    staff_list = [
+        ["Monday", "AM", "Alice", 800.0, 1700.0],
+    ]
+
+    scheduler._add_to_queue(queue, staff_list)
+    availability = queue.get_list()[0].get_availability("Monday_AM")
+
+    assert len(availability) == 20
+    assert availability[:18] == [0] * 18
+    assert availability[18:] == [-1, -1]
+
+
 def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
     scheduler = object.__new__(Scheduler)
     scheduler._staff_attributes = StaffAttributes()
@@ -35,17 +62,17 @@ def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
     temp_queue.add_to_queue("Temp", "Monday", "0900", "1000", 0)
 
     duty_info = {
-        "start_time": "0900",
-        "end_time": "1000",
-        "assignees": [],
-        "required_function": None,
-        "restricted_function": None,
-        "staff_preference": "Teacher First",
+        DUTY_START_TIME: "0900",
+        DUTY_END_TIME: "1000",
+        DUTY_ASSIGNEES: [],
+        DUTY_REQUIRED_FUNCTION: None,
+        DUTY_RESTRICTED_FUNCTION: None,
+        DUTY_STAFF_PREFERENCE: "Teacher First",
     }
     scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
 
-    assert len(duty_info["assignees"]) == 1
-    assert duty_info["assignees"][0].get_name() == "Teacher"
+    assert len(duty_info[DUTY_ASSIGNEES]) == 1
+    assert duty_info[DUTY_ASSIGNEES][0].get_name() == "Teacher"
 
 
 def test_scheduler_assign_staff_to_duty_raises_when_no_staff_available():
@@ -53,12 +80,12 @@ def test_scheduler_assign_staff_to_duty_raises_when_no_staff_available():
     teacher_queue = Queue()
     temp_queue = Queue()
     duty_info = {
-        "start_time": "0900",
-        "end_time": "1000",
-        "assignees": [],
-        "required_function": None,
-        "restricted_function": None,
-        "staff_preference": "Teacher First",
+        DUTY_START_TIME: "0900",
+        DUTY_END_TIME: "1000",
+        DUTY_ASSIGNEES: [],
+        DUTY_REQUIRED_FUNCTION: None,
+        DUTY_RESTRICTED_FUNCTION: None,
+        DUTY_STAFF_PREFERENCE: "Teacher First",
     }
 
     with pytest.raises(ValueError):
@@ -74,17 +101,17 @@ def test_scheduler_assign_staff_to_duty_uses_temp_when_temp_first():
     temp_queue.add_to_queue("Temp", "Monday", "0900", "1000", 0)
 
     duty_info = {
-        "start_time": "0900",
-        "end_time": "1000",
-        "assignees": [],
-        "required_function": None,
-        "restricted_function": None,
-        "staff_preference": "Temp First",
+        DUTY_START_TIME: "0900",
+        DUTY_END_TIME: "1000",
+        DUTY_ASSIGNEES: [],
+        DUTY_REQUIRED_FUNCTION: None,
+        DUTY_RESTRICTED_FUNCTION: None,
+        DUTY_STAFF_PREFERENCE: "Temp First",
     }
     scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
 
-    assert len(duty_info["assignees"]) == 1
-    assert duty_info["assignees"][0].get_name() == "Temp"
+    assert len(duty_info[DUTY_ASSIGNEES]) == 1
+    assert duty_info[DUTY_ASSIGNEES][0].get_name() == "Temp"
 
 
 def test_scheduler_assign_staff_to_duty_respects_required_and_restricted_functions():
@@ -98,12 +125,12 @@ def test_scheduler_assign_staff_to_duty_respects_required_and_restricted_functio
     temp_queue.add_to_queue("Temp", "Monday", "0900", "1000", 0)
 
     duty_info = {
-        "start_time": "0900",
-        "end_time": "1000",
-        "assignees": [],
-        "required_function": "Prefect Duty",
-        "restricted_function": "Prefect Duty",
-        "staff_preference": "Teacher First",
+        DUTY_START_TIME: "0900",
+        DUTY_END_TIME: "1000",
+        DUTY_ASSIGNEES: [],
+        DUTY_REQUIRED_FUNCTION: "Prefect Duty",
+        DUTY_RESTRICTED_FUNCTION: "Prefect Duty",
+        DUTY_STAFF_PREFERENCE: "Teacher First",
     }
     scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
 
@@ -120,15 +147,48 @@ def test_scheduler_assign_staff_to_duty_defaults_to_no_preference_when_missing()
     temp_queue.add_to_queue("Temp", "Monday", "0900", "1000", 0)
 
     duty_info = {
-        "start_time": "0900",
-        "end_time": "1000",
-        "assignees": [],
-        "required_function": None,
-        "restricted_function": None,
+        DUTY_START_TIME: "0900",
+        DUTY_END_TIME: "1000",
+        DUTY_ASSIGNEES: [],
+        DUTY_REQUIRED_FUNCTION: None,
+        DUTY_RESTRICTED_FUNCTION: None,
     }
     scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
 
     assert len(duty_info["assignees"]) == 1
+
+
+def test_order_duties_for_assignment_prioritizes_constrained_duties():
+    scheduler = object.__new__(Scheduler)
+    duties = {
+        "Generic Duty": {
+            "required_function": None,
+            "restricted_function": None,
+            "min_requirement": 1,
+            "ideal_case": 1,
+            "duration": 1.0,
+        },
+        "Prefect Duty": {
+            "required_function": "Prefect Duty",
+            "restricted_function": None,
+            "min_requirement": 1,
+            "ideal_case": 1,
+            "duration": 1.0,
+        },
+        "Restricted Duty": {
+            "required_function": None,
+            "restricted_function": "No Duty",
+            "min_requirement": 1,
+            "ideal_case": 1,
+            "duration": 1.0,
+        },
+    }
+
+    ordered = scheduler._order_duties_for_assignment(duties)
+    ordered_names = [name for name, _ in ordered]
+
+    assert ordered_names[0] in {"Prefect Duty", "Restricted Duty"}
+    assert ordered_names[-1] == "Generic Duty"
 
 
 def test_scheduler_get_staff_attributes_from_excel_reads_required_and_restricted(tmp_path):
@@ -212,7 +272,38 @@ def test_scheduler_get_duties_list_from_excel_populates_duty_roster(tmp_path):
     duty_roster = scheduler._duty_roster.get_duty_roster()
     assert "Monday_2026-08-01" in duty_roster
     assert "Hall Duty" in duty_roster["Monday_2026-08-01"]
-    assert duty_roster["Monday_2026-08-01"]["Hall Duty"]["duration"] == pytest.approx(1.0)
+    assert duty_roster["Monday_2026-08-01"]["Hall Duty"][DUTY_DURATION] == pytest.approx(1.0)
+
+
+def test_scheduler_get_duties_list_from_excel_normalizes_float_times(tmp_path):
+    file_path = tmp_path / "duties.xlsx"
+    duties = pd.DataFrame(
+        {
+            "Day": ["Monday"],
+            "Date": ["2026-08-01"],
+            "Activity": ["Hall Duty"],
+            "Session": ["AM"],
+            "Start Time": [800.0],
+            "End Time": [1700.0],
+            "Minimum Requirement": [1],
+            "Ideal Case": [2],
+            "Required Function": [None],
+            "Restricted Function": [None],
+            "Staff Preference": ["Teacher First"],
+        }
+    )
+    duties.to_excel(file_path, index=False)
+
+    scheduler = object.__new__(Scheduler)
+    scheduler._duty_roster = DutyRoster()
+    scheduler._get_duties_list_from_excel(str(file_path))
+
+    duty_roster = scheduler._duty_roster.get_duty_roster()
+    assert "Monday_2026-08-01" in duty_roster
+    assert "Hall Duty" in duty_roster["Monday_2026-08-01"]
+    assert duty_roster["Monday_2026-08-01"]["Hall Duty"][DUTY_START_TIME] == "0800"
+    assert duty_roster["Monday_2026-08-01"]["Hall Duty"][DUTY_END_TIME] == "1700"
+    assert duty_roster["Monday_2026-08-01"]["Hall Duty"][DUTY_DURATION] == pytest.approx(9.0)
 
 
 def test_scheduler_write_roster_to_excel_creates_file(tmp_path, monkeypatch):
