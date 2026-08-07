@@ -43,7 +43,20 @@ Expected output:
 29 passed in 0.72s
 ```
 
+## Build executable
+
+The project includes a `setup.sh` script that packages the application using PyInstaller.
+
+From the project root, run:
+
+```powershell
+(venv) PS C:\Colin\PythonProjects\TimeTablePlanner> & "C:\Program Files\Git\bin\bash.exe" .\setup.sh
+```
+
+When the build completes, the distributable application will be created in the `dist/` folder.
+
 ## Notes
 
 - Results are written to `teacher_schedule_with_duties.xlsx`.
 - The `tests/` folder contains the current unit test suite for the refactored planner package.
+- The executable is generated in the `dist/` directory using PyInstaller.
