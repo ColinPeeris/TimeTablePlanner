@@ -9,25 +9,32 @@ from planner.utils.constants import (
     DUTY_END_TIME,
     DUTY_START_TIME,
 )
+from planner.schedule_state import ScheduleState
 
 
 class ReportGenerator:
 
     def __init__(
         self,
-        roster,
-        teachers,
-        temps,
+        roster_or_state,
+        teachers=None,
+        temps=None,
         filename="teacher_schedule_with_duties.xlsx",
     ):
-        self._roster = roster
-        self._teachers = teachers
-        self._temps = temps
+        # Accept either a ScheduleState or legacy (roster, teachers, temps)
+        if isinstance(roster_or_state, ScheduleState):
+            state = roster_or_state
+        else:
+            state = ScheduleState(roster_or_state, teachers, temps)
+
+        self._roster = state.roster
+        self._teachers = state.teachers
+        self._temps = state.temps
         self._filename = filename
 
         self._people = (
-            teachers.get_list() +
-            temps.get_list()
+            self._teachers.get_list() +
+            self._temps.get_list()
         )
 
     def generate(self):
