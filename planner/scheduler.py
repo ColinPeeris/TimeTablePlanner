@@ -26,6 +26,8 @@ from .utils.configs import (
     LUNCH_BREAK_END,
     LUNCH_BREAK_MIN_REST_SLOTS,
 )
+from .schedule_state import ScheduleState
+from .state_serializer import StateSerializer
 from report_generator import ReportGenerator
 
 
@@ -53,7 +55,7 @@ class Scheduler:
     `_write_roster_to_excel`.
     """
 
-    def __init__(self, fairness_mode: str = None):
+    def __init__(self, fairness_mode: str = None, days_to_schedule: List[str] = None, previous_roster: dict = None):
         """
         Initialize the Scheduler and execute the duty planning workflow.
 
@@ -65,6 +67,11 @@ class Scheduler:
           - optimize assignment over multiple candidate schedules
           - write the selected roster and distribution to Excel
         """
+        if days_to_schedule is None and previous_roster is not None:
+            raise ValueError("If previous_roster is provided, days_to_schedule must also be provided.")
+        if days_to_schedule is not None and previous_roster is None:
+            raise ValueError("If days_to_schedule is provided, previous_roster must also be provided.")
+
         self._staff_attributes = StaffAttributes()
         self._get_staff_attributes_from_excel(
             "StaffAttributes.xlsx"
@@ -93,21 +100,24 @@ class Scheduler:
         self._add_to_queue(teacher_list, teachers_list)
         self._add_to_queue(temp_list, temps_list)
 
-        best_schedule, finalized_teacher_list, finalized_temp_list = self._optimize_duty_assignment(
+        schedule_state = self._optimize_duty_assignment(
             teacher_list,
             temp_list
         )
-        if best_schedule is None:
+
+        if schedule_state is None:
             raise ValueError(
                 "Unable to find a valid roster that satisfies the configured lunch-break "
                 "requirements. Please verify the lunch-break window and minimum rest slots."
             )
-        self._write_roster_to_excel_2(best_schedule, finalized_teacher_list, finalized_temp_list)
-        ReportGenerator(
-            best_schedule,
-            finalized_teacher_list,
-            finalized_temp_list,
-        ).generate()
+
+        # Persist state companion file
+        excel_filename = "teacher_schedule_with_duties.xlsx"
+        state_filename = excel_filename.replace('.xlsx', '.state')
+        StateSerializer.save(schedule_state, state_filename)
+
+        # Generate human-readable workbook (presentation only)
+        ReportGenerator(schedule_state, filename=excel_filename).generate()
 
     def _get_staff_attributes_from_excel(self, file_name):
         """Load staff required and restricted functions from Excel into StaffAttributes.
@@ -211,6 +221,8 @@ class Scheduler:
                         duties_for_day=duty_roster[day],
                         duty_name=duty_name)
                 for duty_name, duty_info in self._order_duties_for_assignment(duty_roster[day]):
+                    # If the duty has fewer than the ideal number of assignees, attempt to assign additional staff to
+                    # reach the ideal case.
                     if duty_info[DUTY_MIN_REQUIREMENT] < duty_info[DUTY_IDEAL_CASE]:
                         self._assign_staff_to_duty(
                             day, duty_info, _teacher_list, _temp_list,
@@ -257,7 +269,11 @@ class Scheduler:
                 finalized_teacher_list = copy.deepcopy(_teacher_list)
                 finalized_temp_list = copy.deepcopy(_temp_list)
                 final_roster = duty_roster
-        return final_roster, finalized_teacher_list, finalized_temp_list
+
+        if final_roster is None:
+            return None
+
+        return ScheduleState(final_roster, finalized_teacher_list, finalized_temp_list)
 
     def _lunch_provider_satisfied(self, teacher_list, duty_roster):
         """Validate that teachers receive the configured minimum rest slots in the lunch window."""
