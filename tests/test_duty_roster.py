@@ -2,6 +2,7 @@ import pytest
 
 from planner.duty_roster import DutyRoster
 from planner.utils.constants import (
+    DUTY_ACTIVITY,
     DUTY_ASSIGNEES,
     DUTY_DURATION,
     DUTY_END_TIME,
@@ -32,6 +33,7 @@ def test_duty_roster_add_duty_populates_requested_day_only():
     roster = DutyRoster()
     roster._add_day("Monday")
     roster._add_day("Tuesday")
+
     roster.add_duty(
         day="Monday",
         activity="Hall Duty",
@@ -45,18 +47,27 @@ def test_duty_roster_add_duty_populates_requested_day_only():
         staff_preference="Teacher First"
     )
 
-    monday = roster.get_duty_roster()["Monday"]["Hall Duty"]
+    monday_duties = roster.get_duty_roster()["Monday"]
 
+    monday = next(
+        duty
+        for duty in monday_duties.values()
+        if duty[DUTY_ACTIVITY] == "Hall Duty"
+    )
+
+    assert monday[DUTY_ACTIVITY] == "Hall Duty"
     assert monday["session"] == "AM"
     assert monday[DUTY_DURATION] == pytest.approx(1.0)
     assert monday[DUTY_MIN_REQUIREMENT] == 1
     assert monday[DUTY_IDEAL_CASE] == 2
     assert monday[DUTY_ASSIGNEES] == []
-    assert "Hall Duty" not in roster.get_duty_roster()["Tuesday"]
+
+    assert roster.get_duty_roster()["Tuesday"] == {}
 
 
 def test_duty_roster_add_duty_creates_day_with_staff_attributes():
     roster = DutyRoster()
+
     roster.add_duty(
         day="Monday",
         activity="Hall Duty",
@@ -70,7 +81,14 @@ def test_duty_roster_add_duty_creates_day_with_staff_attributes():
         staff_preference="Teacher First",
     )
 
-    monday = roster.get_duty_roster()["Monday"]["Hall Duty"]
+    monday_duties = roster.get_duty_roster()["Monday"]
+
+    monday = next(
+        duty
+        for duty in monday_duties.values()
+        if duty[DUTY_ACTIVITY] == "Hall Duty"
+    )
+
     assert monday[DUTY_REQUIRED_FUNCTION] == "First Aid"
     assert monday[DUTY_RESTRICTED_FUNCTION] == "No Labs"
     assert monday[DUTY_STAFF_PREFERENCE] == "Teacher First"

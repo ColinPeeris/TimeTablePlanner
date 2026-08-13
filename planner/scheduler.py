@@ -10,6 +10,7 @@ from .queue import Queue
 from .staff_attributes import StaffAttributes
 from .utils.constants import (
     DUTY_ASSIGNEES,
+    DUTY_ACTIVITY,
     DUTY_DURATION,
     DUTY_END_TIME,
     DUTY_IDEAL_CASE,
@@ -214,13 +215,13 @@ class Scheduler:
             for day in duty_roster:
                 _teacher_list.shuffle()
                 _temp_list.shuffle()
-                for duty_name, duty_info in self._order_duties_for_assignment(duty_roster[day]):
+                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day]):
                     self._assign_staff_to_duty(
                         day, duty_info, _teacher_list, _temp_list,
                         duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False,
                         duties_for_day=duty_roster[day],
-                        duty_name=duty_name)
-                for duty_name, duty_info in self._order_duties_for_assignment(duty_roster[day]):
+                        duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
+                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day]):
                     # If the duty has fewer than the ideal number of assignees, attempt to assign additional staff to
                     # reach the ideal case.
                     if duty_info[DUTY_MIN_REQUIREMENT] < duty_info[DUTY_IDEAL_CASE]:
@@ -229,7 +230,7 @@ class Scheduler:
                             duty_info[DUTY_IDEAL_CASE] - duty_info[DUTY_MIN_REQUIREMENT],
                             ideal_case=True,
                             duties_for_day=duty_roster[day],
-                            duty_name=duty_name)
+                            duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
 
             # Enforce any configured post-assignment checks before evaluating fairness.
             if not self._lunch_provider_satisfied(_teacher_list, duty_roster):
@@ -329,6 +330,8 @@ class Scheduler:
             - If `ideal_case` is True, a single assignment is attempted and the method returns early.
             - If `ideal_case` is False and no staff is available, a ValueError is raised.
         """
+        duty_name = duty_name or duty_info.get(DUTY_ACTIVITY, "Duty")
+
         preference = duty_info.get(
             DUTY_STAFF_PREFERENCE,
             StaffPreference.NO_PREFERENCE.value
@@ -585,7 +588,7 @@ class Scheduler:
                 key=lambda x: x[1][DUTY_START_TIME]
             )
 
-            for duty_name, duty_info in duties:
+            for duty_id, duty_info in duties:
 
                 teachers = [
                     p.get_name()
@@ -607,7 +610,7 @@ class Scheduler:
                     start,
                     end,
                     duration,
-                    duty_name,
+                    duty_info[DUTY_ACTIVITY],
                     *teachers
                 ])
 

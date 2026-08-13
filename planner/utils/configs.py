@@ -26,9 +26,14 @@ from configparser import ConfigParser
 DEFAULTS = {
 	"fairness_mode": "week",
 	"valid_fairness_modes": ("week", "day_sum", "day_max"),
+
 	"lunch_start": "1130",
 	"lunch_end": "1400",
 	"lunch_min_rest_slots": 2,
+
+	"schedule_start": "0700",
+    "schedule_end": "1900",
+    "schedule_slot_minutes": 30,
 }
 
 
@@ -58,6 +63,28 @@ def _load_config() -> dict:
 	values["fairness_mode"] = cfg.get("fairness", "mode", fallback=DEFAULTS["fairness_mode"]).strip()
 	values["valid_fairness_modes"] = DEFAULTS["valid_fairness_modes"]
 
+	# Schedule
+	values["schedule_start"] = cfg.get(
+		"schedule",
+		"start",
+		fallback=DEFAULTS["schedule_start"]
+	).strip()
+
+	values["schedule_end"] = cfg.get(
+		"schedule",
+		"end",
+		fallback=DEFAULTS["schedule_end"]
+	).strip()
+
+	try:
+		values["schedule_slot_minutes"] = cfg.getint(
+			"schedule",
+			"slot_minutes",
+			fallback=DEFAULTS["schedule_slot_minutes"]
+		)
+	except Exception:
+		values["schedule_slot_minutes"] = DEFAULTS["schedule_slot_minutes"]
+
 	# lunch
 	values["lunch_start"] = cfg.get("lunch", "start", fallback=DEFAULTS["lunch_start"]).strip()
 	values["lunch_end"] = cfg.get("lunch", "end", fallback=DEFAULTS["lunch_end"]).strip()
@@ -67,7 +94,7 @@ def _load_config() -> dict:
 		values["lunch_min_rest_slots"] = DEFAULTS["lunch_min_rest_slots"]
 
 	# Normalise time strings to HHMM
-	for k in ("lunch_start", "lunch_end"):
+	for k in ("lunch_start", "lunch_end", "schedule_start", "schedule_end"):
 		v = values.get(k, "")
 		if v is None:
 			v = ""
@@ -86,3 +113,7 @@ VALID_FAIRNESS_MODES = _CFG["valid_fairness_modes"]
 LUNCH_BREAK_START = _CFG["lunch_start"]
 LUNCH_BREAK_END = _CFG["lunch_end"]
 LUNCH_BREAK_MIN_REST_SLOTS = _CFG["lunch_min_rest_slots"]
+
+SCHEDULE_START = _CFG["schedule_start"]
+SCHEDULE_END = _CFG["schedule_end"]
+SCHEDULE_SLOT_MINUTES = _CFG["schedule_slot_minutes"]

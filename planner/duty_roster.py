@@ -1,5 +1,7 @@
 from .utils.constants import (
     DUTY_ASSIGNEES,
+    DUTY_ID,
+    DUTY_ACTIVITY,
     DUTY_CLASS,
     DUTY_DURATION,
     DUTY_END_TIME,
@@ -19,6 +21,7 @@ class DutyRoster:
 
     def __init__(self):
         self._duty_roster = {}
+        self._next_duty_id = 1
 
     @staticmethod
     def calculate_duration(start_time: str, end_time: str) -> float:
@@ -104,8 +107,12 @@ class DutyRoster:
         """
         if day not in self._duty_roster:
             self._add_day(day)
-        print(f'Adding duty: {activity} on {day} from {start_time} to {end_time}')
-        self._duty_roster[day][activity] = {
+        duty_id = self._next_duty_id
+        self._next_duty_id += 1
+        print(f'Adding duty: {activity} (ID: {duty_id}) on {day} from {start_time} to {end_time}')
+        self._duty_roster[day][duty_id] = {
+            DUTY_ID: duty_id,
+            DUTY_ACTIVITY: activity,
             DUTY_CLASS: class_name if class_name is not None else "",
             DUTY_SESSION: session,
             DUTY_START_TIME: start_time,

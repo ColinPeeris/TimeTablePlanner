@@ -10,13 +10,19 @@ def test_queue_create_queue_from_names():
 def test_queue_add_to_queue_adds_new_person_and_updates_existing():
     queue = Queue()
     queue.add_to_queue("Alice", "Monday", "0900", "1000", 0)
+
     assert len(queue.get_list()) == 1
-    assert queue.get_list()[0].get_availability("Monday")[:2] == [0, 0]
+
+    availability = queue.get_list()[0].get_availability("Monday")
+
+    assert availability[4:6] == [0, 0]
 
     queue.add_to_queue("Alice", "Monday", "1000", "1030", 1)
+
     availability = queue.get_list()[0].get_availability("Monday")
-    assert availability[2] == 1
-    assert availability[:2] == [0, 0]
+
+    assert availability[4:6] == [0, 0]
+    assert availability[6] == 1
 
 
 def test_queue_add_to_queue_supports_early_start_time():
@@ -24,9 +30,17 @@ def test_queue_add_to_queue_supports_early_start_time():
     queue.add_to_queue("Alice", "Monday", "0800", "1700", 0)
 
     availability = queue.get_list()[0].get_availability("Monday")
-    assert len(availability) == 20
-    assert availability[:18] == [0] * 18
-    assert availability[18:] == [-1] * 2
+
+    assert len(availability) == 24
+
+    # 07:00-08:00 is outside the requested availability
+    assert availability[:2] == [-1, -1]
+
+    # 08:00-17:00 is available
+    assert availability[2:20] == [0] * 18
+
+    # 17:00-19:00 is outside the requested availability
+    assert availability[20:] == [-1] * 4
 
 
 def test_queue_select_available_person_selects_and_moves_to_back():

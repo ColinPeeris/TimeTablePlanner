@@ -48,9 +48,9 @@ def test_scheduler_add_to_queue_normalizes_float_times():
     scheduler._add_to_queue(queue, staff_list)
     availability = queue.get_list()[0].get_availability("Monday_AM")
 
-    assert len(availability) == 20
-    assert availability[:18] == [0] * 18
-    assert availability[18:] == [-1, -1]
+    assert len(availability) == 24
+    assert availability[2:20] == [0] * 18
+    assert availability[:2] + availability[20:] == [-1] * 6
 
 
 def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
@@ -270,9 +270,16 @@ def test_scheduler_get_duties_list_from_excel_populates_duty_roster(tmp_path):
     scheduler._get_duties_list_from_excel(str(file_path))
 
     duty_roster = scheduler._duty_roster.get_duty_roster()
-    assert "Monday_2026-08-01" in duty_roster
-    assert "Hall Duty" in duty_roster["Monday_2026-08-01"]
-    assert duty_roster["Monday_2026-08-01"]["Hall Duty"][DUTY_DURATION] == pytest.approx(1.0)
+    day_key = "Monday_2026-08-01"
+    assert day_key in duty_roster
+
+    hall_duty = next((duty for duty in duty_roster[day_key].values() if duty.get("activity") == "Hall Duty"), None)
+    assert hall_duty is not None
+
+    assert "Hall Duty" in hall_duty.get("activity")
+    assert hall_duty[DUTY_DURATION] == pytest.approx(1.0)
+    assert hall_duty[DUTY_STAFF_PREFERENCE] == "Teacher First"
+    assert hall_duty[DUTY_MIN_REQUIREMENT] == 1
 
 
 def test_scheduler_get_duties_list_from_excel_normalizes_float_times(tmp_path):
@@ -299,11 +306,17 @@ def test_scheduler_get_duties_list_from_excel_normalizes_float_times(tmp_path):
     scheduler._get_duties_list_from_excel(str(file_path))
 
     duty_roster = scheduler._duty_roster.get_duty_roster()
-    assert "Monday_2026-08-01" in duty_roster
-    assert "Hall Duty" in duty_roster["Monday_2026-08-01"]
-    assert duty_roster["Monday_2026-08-01"]["Hall Duty"][DUTY_START_TIME] == "0800"
-    assert duty_roster["Monday_2026-08-01"]["Hall Duty"][DUTY_END_TIME] == "1700"
-    assert duty_roster["Monday_2026-08-01"]["Hall Duty"][DUTY_DURATION] == pytest.approx(9.0)
+    day_key = "Monday_2026-08-01"
+    assert day_key in duty_roster
+
+    hall_duty = next((duty for duty in duty_roster[day_key].values() if duty.get("activity") == "Hall Duty"), None)
+    assert hall_duty is not None
+
+    assert "Hall Duty" in hall_duty.get("activity")
+    assert hall_duty[DUTY_START_TIME] == "0800"
+    assert hall_duty[DUTY_END_TIME] == "1700"
+    assert hall_duty[DUTY_DURATION] == pytest.approx(9.0)
+    assert hall_duty[DUTY_STAFF_PREFERENCE] == "Teacher First"
 
 
 def test_scheduler_write_roster_to_excel_creates_file(tmp_path, monkeypatch):

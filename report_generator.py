@@ -5,6 +5,7 @@ import pandas as pd
 from planner.person import Person
 from planner.utils.constants import (
     DUTY_ASSIGNEES,
+    DUTY_ACTIVITY,
     DUTY_CLASS,
     DUTY_END_TIME,
     DUTY_START_TIME,
@@ -125,7 +126,7 @@ class ReportGenerator:
                 key=lambda item: item[1][DUTY_START_TIME]
             )
 
-            for duty_name, duty_info in duties:
+            for duty_id, duty_info in duties:
 
                 assignees = [
                     person.get_name()
@@ -148,7 +149,7 @@ class ReportGenerator:
                     start,
                     end,
                     duration,
-                    duty_name,
+                    duty_info.get(DUTY_ACTIVITY, "Duty"),
                     *assignees
                 ])
 
@@ -240,7 +241,7 @@ class ReportGenerator:
                 row = {"Day": day, "Time": format_slot(slot_start, slot_end)}
                 row.update({class_name: "" for class_name in classes})
 
-                for duty_name, duty_info in self._roster[day].items():
+                for duty_id, duty_info in self._roster[day].items():
                     raw_class_name = duty_info.get(DUTY_CLASS, "") or ""
                     if raw_class_name.strip().lower() == "all":
                         target_classes = classes
@@ -257,7 +258,7 @@ class ReportGenerator:
                         continue
 
                     assignees = [person.get_name() for person in duty_info[DUTY_ASSIGNEES]]
-                    details = build_activity_details(duty_name, assignees)
+                    details = build_activity_details(duty_info.get(DUTY_ACTIVITY, "Duty"), assignees)
 
                     for target_class in target_classes:
                         if target_class not in classes:
@@ -406,6 +407,7 @@ class ReportGenerator:
                     entry["start"]
                     for schedule in schedules.values()
                     for entry in schedule
+                    if entry.get("activity")
                 },
                 key=lambda time_value: int(time_value)
             )
