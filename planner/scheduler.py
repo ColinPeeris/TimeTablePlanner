@@ -172,15 +172,36 @@ class Scheduler:
             )
 
     @staticmethod
-    def _order_duties_for_assignment(duties):
+    def _order_duties_for_assignment(duties, teacher_list, temp_list, staff_attributes):
         """Return duties ordered by assignment priority.
 
         Duties requiring special functions or restrictions are assigned first so
         skilled staff are preserved for constrained assignments.
+
+        This method now considers the number of available staff for each duty,
+        prioritizing duties with fewer qualified candidates.
         """
+        def count_available_for_duty(duty_info):
+            """Count how many people in the queues can perform a given duty."""
+            required_function = duty_info.get(DUTY_REQUIRED_FUNCTION)
+            restricted_function = duty_info.get(DUTY_RESTRICTED_FUNCTION)
+
+            def person_filter(person):
+                return (
+                    staff_attributes.has_required_function(person.get_name(), required_function) and
+                    not staff_attributes.has_restriction(person.get_name(), restricted_function)
+                )
+
+            teacher_count = sum(1 for p in teacher_list.get_list() if person_filter(p))
+            temp_count = sum(1 for p in temp_list.get_list() if person_filter(p))
+            return teacher_count + temp_count
+
         return sorted(
             duties.items(),
             key=lambda item: (
+                # New: Prioritize duties with fewer available staff.
+                count_available_for_duty(item[1]),
+                # Existing criteria follow
                 0 if item[1].get(DUTY_REQUIRED_FUNCTION) is None else -1,
                 0 if item[1].get(DUTY_RESTRICTED_FUNCTION) is None else -1,
                 -(item[1].get(DUTY_MIN_REQUIREMENT) or 0),
@@ -208,23 +229,35 @@ class Scheduler:
         finalized_teacher_list = None
         finalized_temp_list = None
         final_roster = None
-        for _ in range(100):
+        last_error = None
+        for i in range(100):
+            duty_roster = copy.deepcopy(self._duty_roster.get_duty_roster())
             _teacher_list = copy.deepcopy(teacher_list)
             _temp_list = copy.deepcopy(temp_list)
-            duty_roster = copy.deepcopy(self._duty_roster.get_duty_roster())
+            _teacher_list.shuffle()
+            _temp_list.shuffle()
+            assignment_successful = True
             for day in duty_roster:
-                _teacher_list.shuffle()
-                _temp_list.shuffle()
-                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day]):
-                    self._assign_staff_to_duty(
+                if not assignment_successful:
+                    break
+
+                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _teacher_list, _temp_list, self._staff_attributes):
+                    assignment_result = self._assign_staff_to_duty(
                         day, duty_info, _teacher_list, _temp_list,
                         duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False,
                         duties_for_day=duty_roster[day],
                         duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
-                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day]):
+                    if assignment_result is not True:
+                        assignment_successful = False
+                        last_error = assignment_result
+                        break
+                if not assignment_successful:
+                    continue
+                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _teacher_list, _temp_list, self._staff_attributes):
                     # If the duty has fewer than the ideal number of assignees, attempt to assign additional staff to
                     # reach the ideal case.
                     if duty_info[DUTY_MIN_REQUIREMENT] < duty_info[DUTY_IDEAL_CASE]:
+                        # For ideal case, we don't care about the return value as it's optional.
                         self._assign_staff_to_duty(
                             day, duty_info, _teacher_list, _temp_list,
                             duty_info[DUTY_IDEAL_CASE] - duty_info[DUTY_MIN_REQUIREMENT],
@@ -233,7 +266,10 @@ class Scheduler:
                             duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
 
             # Enforce any configured post-assignment checks before evaluating fairness.
-            if not self._lunch_provider_satisfied(_teacher_list, duty_roster):
+            lunch_check_result = self._lunch_provider_satisfied(_teacher_list, duty_roster)
+            if lunch_check_result is not True:
+                # If the check fails, it returns an error string. Store it.
+                last_error = lunch_check_result
                 continue
 
             # Choose fairness metric according to configuration
@@ -272,12 +308,20 @@ class Scheduler:
                 final_roster = duty_roster
 
         if final_roster is None:
-            return None
+            if last_error:
+                raise ValueError(last_error)
+            raise ValueError(
+                "Unable to generate a valid schedule after multiple attempts. All generated schedules failed."
+            )
 
         return ScheduleState(final_roster, finalized_teacher_list, finalized_temp_list)
 
     def _lunch_provider_satisfied(self, teacher_list, duty_roster):
-        """Validate that teachers receive the configured minimum rest slots in the lunch window."""
+        """Validate that teachers receive the configured minimum rest slots in the lunch window.
+
+        Returns:
+            True if satisfied, otherwise an error string with failure details.
+        """
         for teacher in teacher_list.get_list():
             for day_key in sorted(duty_roster.keys()):
                 if not self._is_lunch_window_applicable(teacher, day_key):
@@ -289,7 +333,11 @@ class Scheduler:
                     self._lunch_break_end,
                 )
                 if rest_slots < self._lunch_break_min_rest_slots:
-                    return False
+                    return (
+                        f"Lunch break validation failed for {teacher.get_name()} on {day_key}. "
+                        f"Required {self._lunch_break_min_rest_slots} rest slots between "
+                        f"{self._lunch_break_start} and {self._lunch_break_end}, but found only {rest_slots}."
+                    )
         return True
 
     @staticmethod
@@ -312,24 +360,19 @@ class Scheduler:
             return 0
         return sum(1 for status in availability[start_index:end_index] if status == 0)
 
+    @staticmethod
+    def _was_working_before(person: Person, day: str, duty_start_time: str) -> bool:
+        """Check if the person was working in the slot just before the duty."""
+        start_index = person.time_to_index(duty_start_time)
+        if start_index == 0:
+            return False
+        availability = person.get_availability(day)
+        if not availability or start_index >= len(availability):
+            return False
+        # Status of 1 means "working"
+        return availability[start_index - 1] == 1
+
     def _assign_staff_to_duty(self, day, duty_info, teacher_list, temp_list, required_count, ideal_case: bool, duties_for_day=None, duty_name=None):
-        """
-        Assigns staff to a single duty until the required headcount is reached.
-
-        Args:
-            day (str): Normalized day identifier for the duty (e.g. "Monday_AM").
-            duty_info (dict): Duty metadata including class_name, start_time, end_time, assignees, min_requirement, and ideal_case.
-            teacher_list (Queue): Queue of available teachers.
-            temp_list (Queue): Queue of available temps.
-            required_count (int): Number of staff to assign for this pass.
-            ideal_case (bool): Whether this assignment is filling optional ideal positions.
-            duty_name (str, optional): Optional duty identifier for error messages.
-
-        Notes:
-            - Teachers are chosen first, then temps if no teacher is available.
-            - If `ideal_case` is True, a single assignment is attempted and the method returns early.
-            - If `ideal_case` is False and no staff is available, a ValueError is raised.
-        """
         duty_name = duty_name or duty_info.get(DUTY_ACTIVITY, "Duty")
 
         preference = duty_info.get(
@@ -342,8 +385,8 @@ class Scheduler:
         required_function = duty_info.get(DUTY_REQUIRED_FUNCTION)
         restricted_function = duty_info.get(DUTY_RESTRICTED_FUNCTION)
 
-        # Define a filter function to check if a person meets the required and restricted function criteria.
-        person_filter = lambda person: (
+        # Base filter for skills and restrictions
+        base_person_filter = lambda person: (
             self._staff_attributes.has_required_function(
                 person.get_name(),
                 required_function
@@ -354,161 +397,68 @@ class Scheduler:
                 restricted_function
             )
         )
+
         for _ in range(int(required_count)):
-            selected_teacher = None
-            selected_temp = None
-            if preference == StaffPreference.TEACHER_FIRST.value:
-                selected_teacher = teacher_list.select_available_person(
-                    day,
-                    duty_info[DUTY_START_TIME],
-                    duty_info[DUTY_END_TIME],
-                    person_filter=person_filter
-                )
-                if selected_teacher:
-                    duty_info[DUTY_ASSIGNEES].append(selected_teacher)
-                    selected_teacher.add_duty(
-                        day,
-                        duty_name,
-                        duty_info
-                    )
+            # This function will try to select a person based on the preference order.
+            def select_person(person_filter):
+                if preference == StaffPreference.TEACHER_FIRST.value:
+                    person = teacher_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
+                    if not person:
+                        person = temp_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
+                    return person
+                elif preference == StaffPreference.TEMP_FIRST.value:
+                    person = temp_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
+                    if not person:
+                        person = teacher_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
+                    return person
+                elif preference == StaffPreference.NO_PREFERENCE.value:
+                    # Default to Teacher First for no preference
+                    person = teacher_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
+                    if not person:
+                        person = temp_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
+                    return person
                 else:
-                    # If no teacher is available, try to assign a temp
-                    selected_temp = temp_list.select_available_person(
-                        day,
-                        duty_info[DUTY_START_TIME],
-                        duty_info[DUTY_END_TIME],
-                        person_filter=person_filter
-                    )
-                    if selected_temp:
-                        duty_info[DUTY_ASSIGNEES].append(selected_temp)
-                        selected_temp.add_duty(
-                            day,
-                            duty_name,
-                            duty_info
-                        )
-            elif preference == StaffPreference.TEMP_FIRST.value:
-                selected_temp = temp_list.select_available_person(
-                    day,
-                    duty_info[DUTY_START_TIME],
-                    duty_info[DUTY_END_TIME],
-                    person_filter=person_filter
-                )
-                if selected_temp:
-                    duty_info[DUTY_ASSIGNEES].append(selected_temp)
-                    selected_temp.add_duty(
-                        day,
-                        duty_name,
-                        duty_info
-                    )
-                else:
-                    # If no temp is available, try to assign a teacher
-                    selected_teacher = teacher_list.select_available_person(
-                        day,
-                        duty_info[DUTY_START_TIME],
-                        duty_info[DUTY_END_TIME],
-                        person_filter=person_filter
-                    )
-                    if selected_teacher:
-                        duty_info[DUTY_ASSIGNEES].append(selected_teacher)
-                        selected_teacher.add_duty(
-                            day,
-                            duty_name,
-                            duty_info
-                        )
-            elif preference == StaffPreference.NO_PREFERENCE.value:
-                # If no preference is specified, select the staff member with the lowest workload ratio
-                selected_teacher = teacher_list.select_available_person(
-                    day,
-                    duty_info[DUTY_START_TIME],
-                    duty_info[DUTY_END_TIME],
-                    person_filter=person_filter
-                )
-                selected_temp = temp_list.select_available_person(
-                    day,
-                    duty_info[DUTY_START_TIME],
-                    duty_info[DUTY_END_TIME],
-                    person_filter=person_filter
-                )
-                if selected_teacher and selected_temp:
-                    if (
-                        selected_teacher.get_work_capacity_ratio()
-                        <= selected_temp.get_work_capacity_ratio()
-                    ):
-                        duty_info[DUTY_ASSIGNEES].append(selected_teacher)
-                        selected_teacher.add_duty(
-                            day,
-                            duty_name,
-                            duty_info
-                        )
-                    else:
-                        duty_info[DUTY_ASSIGNEES].append(selected_temp)
-                        selected_temp.add_duty(
-                            day,
-                            duty_name,
-                            duty_info
-                        )
-                elif selected_teacher:
-                    duty_info[DUTY_ASSIGNEES].append(selected_teacher)
-                    selected_teacher.add_duty(
-                        day,
-                        duty_name,
-                        duty_info
-                    )
-                elif selected_temp:
-                    duty_info[DUTY_ASSIGNEES].append(selected_temp)
-                    selected_temp.add_duty(
-                        day,
-                        duty_name,
-                        duty_info
-                    )
+                    raise ValueError(f"Unknown staff preference: {preference}")
+
+            # --- Selection Logic ---
+            selected_person = None
+            duty_start_time = duty_info[DUTY_START_TIME]
+            duty_start_minutes = Person._time_to_minutes(duty_start_time)
+            lunch_start_minutes = Person._time_to_minutes(self._lunch_break_start)
+            lunch_end_minutes = Person._time_to_minutes(self._lunch_break_end)
+
+            is_during_lunch = lunch_start_minutes <= duty_start_minutes < lunch_end_minutes
+
+            if is_during_lunch:
+                # --- Two-Pass Selection for lunch window ---
+                # 1. First Pass: Try to find a rested person
+                def rested_filter(person):
+                    return base_person_filter(person) and not self._was_working_before(person, day, duty_start_time)
+
+                selected_person = select_person(rested_filter)
+
+                # 2. Second Pass: If no rested person, find anyone available
+                if not selected_person:
+                    selected_person = select_person(base_person_filter)
             else:
-                raise ValueError(f"Unknown staff preference: {preference}")
+                # --- Single-Pass Selection outside lunch window ---
+                selected_person = select_person(base_person_filter)
+
+            # --- Assignment ---
+            if selected_person:
+                duty_info[DUTY_ASSIGNEES].append(selected_person)
+                selected_person.add_duty(
+                    day, duty_name, duty_info
+                )
+            else:
+                # No one could be found, even with the fallback.
+                if ideal_case:
+                    return True # It's okay to not fill ideal slots
+                return f"Unable to find sufficient staff for {duty_name}"
 
             if ideal_case:
-                return
-
-            if not selected_teacher and not selected_temp:
-                # Build enhanced diagnostic information about overlapping duties and assignees
-                def _to_minutes(hhmm: str) -> int:
-                    try:
-                        hh = int(hhmm[:2])
-                        mm = int(hhmm[2:])
-                        return hh * 60 + mm
-                    except Exception:
-                        return 0
-
-                cur_start = _to_minutes(str(duty_info.get(DUTY_START_TIME)))
-                cur_end = _to_minutes(str(duty_info.get(DUTY_END_TIME)))
-
-                overlaps = []
-                if duties_for_day:
-                    for other_name, other_info in duties_for_day.items():
-                        if other_name == duty_name:
-                            continue
-                        other_start = _to_minutes(str(other_info.get(DUTY_START_TIME)))
-                        other_end = _to_minutes(str(other_info.get(DUTY_END_TIME)))
-                        # overlapping if not (other_end <= cur_start or other_start >= cur_end)
-                        if not (other_end <= cur_start or other_start >= cur_end):
-                            assigned = [a.get_name() for a in other_info.get(DUTY_ASSIGNEES, [])]
-                            overlaps.append((other_name, other_info.get(DUTY_START_TIME), other_info.get(DUTY_END_TIME), assigned))
-
-                assigned_here = [a.get_name() for a in duty_info.get(DUTY_ASSIGNEES, [])]
-
-                msg_lines = [
-                    f"Unable to find sufficient staff for {duty_name} {duty_info[DUTY_START_TIME]} to {duty_info[DUTY_END_TIME]} on {day}",
-                    ""
-                ]
-                if overlaps:
-                    msg_lines.append(f"Overlapping duties ({len(overlaps)}):")
-                    for oname, s, e, assignees in overlaps:
-                        msg_lines.append(f" - {oname} {s} to {e}, assignees: {assignees}")
-                else:
-                    msg_lines.append("No overlapping duties found for this day in provided data.")
-
-                msg_lines.append("")
-                msg_lines.append(f"Already assigned to this duty: {assigned_here}")
-
-                raise ValueError("\n".join(msg_lines))
+                return True
+        return True
 
     @staticmethod
     def _write_roster_to_excel(roster: dict, finalized_teacher_list: Queue, finalized_temp_list: Queue) -> None:
@@ -731,8 +681,6 @@ class Scheduler:
                         width,
                         centre_format,
                     )
-
-        print("Data has been written to teacher_schedule_with_duties.xlsx")
 
     @staticmethod
     def _get_staff_availability(file_name: str) -> Tuple[List, List]:

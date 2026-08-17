@@ -1,4 +1,5 @@
 import pandas as pd
+import copy
 import pytest
 
 from planner.duty_roster import DutyRoster
@@ -8,6 +9,7 @@ from planner.scheduler import Scheduler
 from planner.staff_attributes import StaffAttributes
 from planner.utils.constants import (
     DUTY_ASSIGNEES,
+    DUTY_ACTIVITY,
     DUTY_DURATION,
     DUTY_END_TIME,
     DUTY_IDEAL_CASE,
@@ -56,6 +58,8 @@ def test_scheduler_add_to_queue_normalizes_float_times():
 def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
     scheduler = object.__new__(Scheduler)
     scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
     teacher_queue = Queue()
     temp_queue = Queue()
     teacher_queue.add_to_queue("Teacher", "Monday", "0900", "1000", 0)
@@ -77,6 +81,8 @@ def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
 
 def test_scheduler_assign_staff_to_duty_raises_when_no_staff_available():
     scheduler = object.__new__(Scheduler)
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
     teacher_queue = Queue()
     temp_queue = Queue()
     duty_info = {
@@ -88,13 +94,16 @@ def test_scheduler_assign_staff_to_duty_raises_when_no_staff_available():
         DUTY_STAFF_PREFERENCE: "Teacher First",
     }
 
-    with pytest.raises(ValueError):
-        scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
+    # The method now returns an error string instead of raising an exception.
+    result = scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
+    assert isinstance(result, str)
 
 
 def test_scheduler_assign_staff_to_duty_uses_temp_when_temp_first():
     scheduler = object.__new__(Scheduler)
     scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
     teacher_queue = Queue()
     temp_queue = Queue()
     teacher_queue.add_to_queue("Teacher", "Monday", "0900", "1000", 0)
@@ -117,6 +126,8 @@ def test_scheduler_assign_staff_to_duty_uses_temp_when_temp_first():
 def test_scheduler_assign_staff_to_duty_respects_required_and_restricted_functions():
     scheduler = object.__new__(Scheduler)
     scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
     scheduler._staff_attributes.add_required_function("Teacher", "Prefect Duty")
     scheduler._staff_attributes.add_restricted_function("Temp", "Prefect Duty")
     teacher_queue = Queue()
@@ -141,6 +152,8 @@ def test_scheduler_assign_staff_to_duty_respects_required_and_restricted_functio
 def test_scheduler_assign_staff_to_duty_defaults_to_no_preference_when_missing():
     scheduler = object.__new__(Scheduler)
     scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
     teacher_queue = Queue()
     temp_queue = Queue()
     teacher_queue.add_to_queue("Teacher", "Monday", "0900", "1000", 0)
@@ -160,6 +173,7 @@ def test_scheduler_assign_staff_to_duty_defaults_to_no_preference_when_missing()
 
 def test_order_duties_for_assignment_prioritizes_constrained_duties():
     scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
     duties = {
         "Generic Duty": {
             "required_function": None,
@@ -184,7 +198,11 @@ def test_order_duties_for_assignment_prioritizes_constrained_duties():
         },
     }
 
-    ordered = scheduler._order_duties_for_assignment(duties)
+    # Create empty queues for the method call
+    teacher_queue = Queue()
+    temp_queue = Queue()
+
+    ordered = scheduler._order_duties_for_assignment(duties, teacher_queue, temp_queue, scheduler._staff_attributes)
     ordered_names = [name for name, _ in ordered]
 
     assert ordered_names[0] in {"Prefect Duty", "Restricted Duty"}
@@ -328,3 +346,82 @@ def test_scheduler_write_roster_to_excel_creates_file(tmp_path, monkeypatch):
 
     Scheduler._write_roster_to_excel(roster, teacher_queue, temp_queue)
     assert (tmp_path / "teacher_schedule_with_duties.xlsx").exists()
+
+
+def test_scheduler_assign_staff_to_duty_fails_when_specialized_staff_is_misallocated(monkeypatch):
+    # This test simulates a scenario where a multi-skilled person is assigned to a
+    # general duty, making them unavailable for a specialized duty that only they can perform.
+    # The scheduler should be smart enough to reserve them for the specialized duty.
+
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
+
+    # Three teachers, Alice has a unique skill 'First Aid'
+    scheduler._staff_attributes.add_required_function("Alice", "Structured Classes")
+    scheduler._staff_attributes.add_required_function("Alice", "First Aid")
+    scheduler._staff_attributes.add_required_function("Bob", "Structured Classes")
+    scheduler._staff_attributes.add_required_function("Carol", "Structured Classes")
+
+    teacher_queue = Queue()
+    temp_queue = Queue()
+    teacher_queue.add_to_queue("Alice", "Monday", "0900", "1000", 0)
+    teacher_queue.add_to_queue("Bob", "Monday", "0900", "1000", 0)
+    teacher_queue.add_to_queue("Carol", "Monday", "0900", "1000", 0)
+
+    # Two duties for the same time slot.
+    # 'Structured Classes' needs 2 people, 'First Aid' needs 1.
+    # Alice is the only one who can do 'First Aid'.
+    duties = {
+        "first_aid_duty": {
+            DUTY_ACTIVITY: "First Aid Duty",
+            DUTY_START_TIME: "0900",
+            DUTY_END_TIME: "1000",
+            DUTY_MIN_REQUIREMENT: 1,
+            DUTY_IDEAL_CASE: 1,
+            DUTY_REQUIRED_FUNCTION: "First Aid",
+            DUTY_RESTRICTED_FUNCTION: None,
+            DUTY_ASSIGNEES: [],
+        },
+        "structured_duty": {
+            DUTY_ACTIVITY: "Structured Classes Duty",
+            DUTY_START_TIME: "0900",
+            DUTY_END_TIME: "1000",
+            DUTY_MIN_REQUIREMENT: 2,
+            DUTY_IDEAL_CASE: 2,
+            DUTY_REQUIRED_FUNCTION: "Structured Classes",
+            DUTY_RESTRICTED_FUNCTION: None,
+            DUTY_ASSIGNEES: [],
+        },
+    }
+
+    # The current _order_duties_for_assignment prioritizes by min_requirement,
+    # so 'structured_duty' will be assigned first. If Alice is picked for it,
+    # the 'first_aid_duty' assignment will fail.
+    # We will force the order of the queue to trigger this.
+    monkeypatch.setattr("planner.queue.shuffle", lambda x: None)
+
+    # The scheduler should now be smart enough to handle this.
+    # It will fail the first attempt, but the optimization loop will shuffle and retry.
+    # To test this, we'll simulate the loop's behavior.
+
+    # First attempt (bad order)
+    _teacher_q_1 = copy.deepcopy(teacher_queue)
+    _temp_q_1 = copy.deepcopy(temp_queue)
+    ordered_duties = scheduler._order_duties_for_assignment(duties, _teacher_q_1, _temp_q_1, scheduler._staff_attributes)
+
+    # Manually assign the less-constrained 'structured_duty' first to simulate a bad assignment order.
+    # With no shuffling, this will assign Alice and Bob.
+    scheduler._assign_staff_to_duty("Monday", duties["structured_duty"], _teacher_q_1, _temp_q_1, duties["structured_duty"][DUTY_MIN_REQUIREMENT], ideal_case=False, duty_name="Structured Classes Duty")
+
+    # Now, attempt to assign the first_aid_duty. This should fail because Alice is no longer available.
+    result_1 = scheduler._assign_staff_to_duty("Monday", duties["first_aid_duty"], _teacher_q_1, _temp_q_1, 1, ideal_case=False, duty_name="First Aid Duty")
+    assert isinstance(result_1, str)
+    assert "Unable to find sufficient staff" in result_1
+
+    # Second attempt (simulating a shuffle where Alice is last)
+    _teacher_q_2 = copy.deepcopy(teacher_queue)
+    _teacher_q_2._queue.reverse() # Move Alice to the end
+    for duty_id, duty_info in ordered_duties:
+        assert scheduler._assign_staff_to_duty("Monday", duty_info, _teacher_q_2, temp_queue, duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False, duty_name=duty_info[DUTY_ACTIVITY]) is True
