@@ -79,9 +79,9 @@ Expected output:
 29 passed in 0.72s
 ```
 
-## Build executable
+## Build executable (Local)
 
-The project includes a `setup.sh` script that packages the application using PyInstaller.
+The project includes a `setup.sh` script that packages the application using PyInstaller on Windows.
 
 From the project root, run:
 
@@ -90,6 +90,45 @@ From the project root, run:
 ```
 
 When the build completes, the distributable application will be created in the `dist/` folder.
+
+## Running the Standalone Executable
+
+Ensure the required Excel files (`AvailabilityList.xlsx`, `DutiesBreakdown.xlsx`, `StaffAttributes.xlsx`, and optional `config.ini`) are in the same folder as the executable.
+
+### On Windows
+- Double-click `TimeTablePlanner-windows.exe` (or `main.exe`), or run from terminal:
+  ```powershell
+  .\TimeTablePlanner-windows.exe
+  ```
+- The console will display progress and wait for you to press `Enter` before closing.
+
+### On macOS
+1. **Grant execution permission** (first time only):
+   ```bash
+   chmod +x TimeTablePlanner-macos
+   ```
+2. **Run from Terminal**:
+   ```bash
+   ./TimeTablePlanner-macos
+   ```
+3. **macOS Gatekeeper Note**:
+   If macOS shows a security prompt (*"cannot be opened because the developer cannot be verified"*):
+   - Either right-click `TimeTablePlanner-macos` in Finder, select **Open**, and confirm **Open**.
+   - Or clear the quarantine attribute via Terminal:
+     ```bash
+     xattr -cr TimeTablePlanner-macos
+     ```
+
+## Automated Builds (GitHub Actions CI/CD)
+
+The repository includes a GitHub Actions workflow (`.github/workflows/build-executables.yml`) that automatically builds both Windows (`.exe`) and macOS binaries:
+
+- **Manual Trigger**: Go to the **Actions** tab on GitHub -> select **Build Executables (Windows & macOS)** -> click **Run workflow**. Once finished, download the binaries under **Artifacts**.
+- **Release on Tag**: Pushing a version tag (e.g. `v1.0.0`) automatically builds both binaries and publishes a GitHub Release:
+  ```bash
+  git tag v1.0.0
+  git push origin v1.0.0
+  ```
 
 ## Notes
 
