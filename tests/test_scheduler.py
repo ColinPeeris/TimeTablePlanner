@@ -425,3 +425,39 @@ def test_scheduler_assign_staff_to_duty_fails_when_specialized_staff_is_misalloc
     _teacher_q_2._queue.reverse() # Move Alice to the end
     for duty_id, duty_info in ordered_duties:
         assert scheduler._assign_staff_to_duty("Monday", duty_info, _teacher_q_2, temp_queue, duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False, duty_name=duty_info[DUTY_ACTIVITY]) is True
+
+
+def test_scheduler_optimize_duty_assignment_raises_value_error_on_failure():
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._fairness_mode = "week"
+    scheduler._lunch_break_start = "1200"
+    scheduler._lunch_break_end = "1400"
+    scheduler._lunch_break_min_rest_slots = 2
+    scheduler._duty_roster = DutyRoster()
+
+    # Define a duty roster with an impossible duty
+    scheduler._duty_roster._add_day("Monday")
+    scheduler._duty_roster.add_duty(
+        day="Monday",
+        activity="Supervision",
+        session="AM",
+        start_time="0900",
+        end_time="1000",
+        min_requirement=5,
+        ideal_case=5,
+        required_function=None,
+        restricted_function=None,
+        staff_preference="No Preference",
+    )
+
+    teacher_queue = Queue()
+    temp_queue = Queue()
+    # Add only 1 person when 5 are required
+    teacher_queue.add_to_queue("Teacher1", "Monday", "0800", "1700", 0)
+
+    with pytest.raises(ValueError) as exc_info:
+        scheduler._optimize_duty_assignment(teacher_queue, temp_queue)
+
+    assert "Unable to find sufficient staff for Supervision" in str(exc_info.value)
+

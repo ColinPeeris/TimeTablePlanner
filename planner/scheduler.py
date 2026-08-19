@@ -1,5 +1,5 @@
 import copy
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from enum import Enum
 
 import pandas as pd
@@ -238,9 +238,6 @@ class Scheduler:
             _temp_list.shuffle()
             assignment_successful = True
             for day in duty_roster:
-                if not assignment_successful:
-                    break
-
                 for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _teacher_list, _temp_list, self._staff_attributes):
                     assignment_result = self._assign_staff_to_duty(
                         day, duty_info, _teacher_list, _temp_list,
@@ -251,8 +248,11 @@ class Scheduler:
                         assignment_successful = False
                         last_error = assignment_result
                         break
+
                 if not assignment_successful:
-                    continue
+                    # Stop assigning duties for the current day and move to the next iteration.
+                    break
+
                 for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _teacher_list, _temp_list, self._staff_attributes):
                     # If the duty has fewer than the ideal number of assignees, attempt to assign additional staff to
                     # reach the ideal case.
@@ -264,6 +264,10 @@ class Scheduler:
                             ideal_case=True,
                             duties_for_day=duty_roster[day],
                             duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
+
+            if not assignment_successful:
+                # Skip to the next iteration if the assignment was not successful.
+                continue
 
             # Enforce any configured post-assignment checks before evaluating fairness.
             lunch_check_result = self._lunch_provider_satisfied(_teacher_list, duty_roster)
@@ -372,7 +376,39 @@ class Scheduler:
         # Status of 1 means "working"
         return availability[start_index - 1] == 1
 
-    def _assign_staff_to_duty(self, day, duty_info, teacher_list, temp_list, required_count, ideal_case: bool, duties_for_day=None, duty_name=None):
+    def _assign_staff_to_duty(
+        self,
+        day: str,
+        duty_info: dict,
+        teacher_list: Queue,
+        temp_list: Queue,
+        required_count: int,
+        ideal_case: bool,
+        duties_for_day: Optional[dict] = None,
+        duty_name: Optional[str] = None,
+    ) -> Union[bool, str]:
+        """
+        Assign available staff members to a specified duty slot.
+
+        Selects staff members from the teacher and temp queues based on staff preferences,
+        required/restricted qualifications, and lunch-break rest constraints. Assigned staff
+        have their workloads and schedules updated.
+
+        Args:
+            day (str): The day identifier for the duty (e.g., 'Wednesday_2026-08-19_00:00:00').
+            duty_info (dict): Dictionary containing duty metadata (time, assignees, requirements).
+            teacher_list (Queue): Queue of teacher staff members.
+            temp_list (Queue): Queue of temporary staff members.
+            required_count (int): Number of staff members to assign.
+            ideal_case (bool): Whether this assignment is for optional ideal capacity (True)
+                or mandatory minimum requirement (False).
+            duties_for_day (Optional[dict]): All duties scheduled for the given day. Defaults to None.
+            duty_name (Optional[str]): Human-readable name of the duty activity. Defaults to None.
+
+        Returns:
+            Union[bool, str]: True if the requested number of staff was successfully assigned
+                (or if ideal_case is True), otherwise an error string detailing the failure.
+        """
         duty_name = duty_name or duty_info.get(DUTY_ACTIVITY, "Duty")
 
         preference = duty_info.get(
@@ -454,7 +490,7 @@ class Scheduler:
                 # No one could be found, even with the fallback.
                 if ideal_case:
                     return True # It's okay to not fill ideal slots
-                return f"Unable to find sufficient staff for {duty_name}"
+                return f"Unable to find sufficient staff for {duty_name} on {day} from {duty_start_time} to {duty_info[DUTY_END_TIME]}"
 
             if ideal_case:
                 return True
