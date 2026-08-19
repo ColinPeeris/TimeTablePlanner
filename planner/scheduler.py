@@ -10,6 +10,7 @@ from .queue import Queue
 from .staff_attributes import StaffAttributes
 from .utils.constants import (
     DUTY_ASSIGNEES,
+    DUTY_ID,
     DUTY_ACTIVITY,
     DUTY_DURATION,
     DUTY_END_TIME,
@@ -490,11 +491,182 @@ class Scheduler:
                 # No one could be found, even with the fallback.
                 if ideal_case:
                     return True # It's okay to not fill ideal slots
-                return f"Unable to find sufficient staff for {duty_name} on {day} from {duty_start_time} to {duty_info[DUTY_END_TIME]}"
+                return self._format_insufficient_staff_error(
+                    day=day,
+                    duty_info=duty_info,
+                    teacher_list=teacher_list,
+                    temp_list=temp_list,
+                    duties_for_day=duties_for_day,
+                    duty_name=duty_name
+                )
 
             if ideal_case:
                 return True
         return True
+
+    def _format_insufficient_staff_error(
+        self,
+        day: str,
+        duty_info: dict,
+        teacher_list: Queue,
+        temp_list: Queue,
+        duties_for_day: Optional[dict] = None,
+        duty_name: Optional[str] = None,
+    ) -> str:
+        """
+        Format a detailed diagnostic error message when staff assignment fails.
+
+        Provides a breakdown of the target duty requirements, concurrent duties in the
+        same timeframe with their assigned staff, and the status of all teachers/temps
+        (engaged, disqualified, or unavailable).
+
+        Args:
+            day (str): Day key where assignment failed.
+            duty_info (dict): Duty configuration and state dictionary.
+            teacher_list (Queue): Teacher queue.
+            temp_list (Queue): Temp queue.
+            duties_for_day (Optional[dict]): All duties for this day.
+            duty_name (Optional[str]): Human-readable name of the duty.
+
+        Returns:
+            str: Multi-line diagnostic error message.
+        """
+        duty_name = duty_name or duty_info.get(DUTY_ACTIVITY, "Duty")
+        start_time = duty_info.get(DUTY_START_TIME, "??")
+        end_time = duty_info.get(DUTY_END_TIME, "??")
+        req_count = duty_info.get(DUTY_MIN_REQUIREMENT, 1)
+        ideal_count = duty_info.get(DUTY_IDEAL_CASE, req_count)
+        req_func = duty_info.get(DUTY_REQUIRED_FUNCTION)
+        restr_func = duty_info.get(DUTY_RESTRICTED_FUNCTION)
+        pref = duty_info.get(DUTY_STAFF_PREFERENCE, StaffPreference.NO_PREFERENCE.value)
+
+        currently_assigned = [p.get_name() for p in duty_info.get(DUTY_ASSIGNEES, [])]
+        assigned_str = ", ".join(currently_assigned) if currently_assigned else "None"
+        still_needed = max(0, req_count - len(currently_assigned))
+
+        lines = [
+            f"Unable to find sufficient staff for {duty_name} on {day} from {start_time} to {end_time}.",
+            "",
+            "--- Target Duty Details ---",
+            f"  Activity: {duty_name}",
+            f"  Time: {start_time} - {end_time}",
+            f"  Requirements: Min: {req_count} | Ideal: {ideal_count} | Still Needed: {still_needed}",
+            f"  Preferences / Functions: Preference: {pref} | Required Function: {req_func} | Restriction: {restr_func}",
+            f"  Currently Assigned: {assigned_str}",
+        ]
+
+        try:
+            target_start_min = Person._time_to_minutes(start_time)
+            target_end_min = Person._time_to_minutes(end_time)
+        except Exception:
+            target_start_min = 0
+            target_end_min = 0
+
+        # 1. Concurrent Duties in the same timeframe
+        if duties_for_day:
+            concurrent_duties = []
+            for d_id, d_info in duties_for_day.items():
+                try:
+                    d_start = Person._time_to_minutes(d_info[DUTY_START_TIME])
+                    d_end = Person._time_to_minutes(d_info[DUTY_END_TIME])
+                    if max(target_start_min, d_start) < min(target_end_min, d_end):
+                        concurrent_duties.append(d_info)
+                except Exception:
+                    continue
+
+            # Sort concurrent duties by start time and id
+            concurrent_duties.sort(key=lambda d: (d.get(DUTY_START_TIME, ""), d.get(DUTY_ID, 0)))
+
+            lines.append("")
+            lines.append(f"--- Concurrent Duties in Timeframe ({start_time} - {end_time}) ---")
+            total_min_required = sum(d.get(DUTY_MIN_REQUIREMENT, 0) for d in concurrent_duties)
+            lines.append(f"  Total Concurrent Duties: {len(concurrent_duties)} | Total Minimum Staff Required: {total_min_required}")
+            for idx, d in enumerate(concurrent_duties, 1):
+                d_act = d.get(DUTY_ACTIVITY, "Duty")
+                d_id = d.get(DUTY_ID, "")
+                d_id_str = f" (ID: {d_id})" if d_id else ""
+                d_s = d.get(DUTY_START_TIME, "")
+                d_e = d.get(DUTY_END_TIME, "")
+                d_min = d.get(DUTY_MIN_REQUIREMENT, 0)
+                d_ideal = d.get(DUTY_IDEAL_CASE, 0)
+                d_rf = d.get(DUTY_REQUIRED_FUNCTION)
+                d_rf_str = f" | Req: {d_rf}" if d_rf else ""
+                d_restr = d.get(DUTY_RESTRICTED_FUNCTION)
+                d_restr_str = f" | Restr: {d_restr}" if d_restr else ""
+                d_assignees = [p.get_name() for p in d.get(DUTY_ASSIGNEES, [])]
+                d_assignees_str = ", ".join(d_assignees) if d_assignees else "None"
+                lines.append(f"  {idx}. {d_act}{d_id_str} [{d_s} - {d_e}] | Min: {d_min}, Ideal: {d_ideal}{d_rf_str}{d_restr_str} | Assigned: {d_assignees_str}")
+
+        # 2. Staff Status during the timeframe
+        teacher_persons = teacher_list.get_list() if teacher_list else []
+        temp_persons = temp_list.get_list() if temp_list else []
+        all_staff = [("Teacher", p) for p in teacher_persons] + [("Temp", p) for p in temp_persons]
+
+        lunch_start_minutes = Person._time_to_minutes(self._lunch_break_start) if hasattr(self, "_lunch_break_start") else 0
+        lunch_end_minutes = Person._time_to_minutes(self._lunch_break_end) if hasattr(self, "_lunch_break_end") else 0
+        is_during_lunch = lunch_start_minutes <= target_start_min < lunch_end_minutes
+
+        engaged_staff = []
+        free_disqualified = []
+        free_eligible = []
+        unavailable_staff = []
+
+        for role, person in all_staff:
+            name = person.get_name()
+            if person.check_availability(day, start_time, end_time):
+                # Free in time slot, check why not chosen
+                reasons = []
+                if req_func and hasattr(self, "_staff_attributes") and not self._staff_attributes.has_required_function(name, req_func):
+                    reasons.append(f"missing required function '{req_func}'")
+                if restr_func and hasattr(self, "_staff_attributes") and self._staff_attributes.has_restriction(name, restr_func):
+                    reasons.append(f"has restriction '{restr_func}'")
+                if is_during_lunch and hasattr(self, "_was_working_before") and self._was_working_before(person, day, start_time):
+                    reasons.append("worked immediately prior in lunch window")
+
+                if reasons:
+                    free_disqualified.append(f"  - {role}: {name} (Free, but disqualified: {', '.join(reasons)})")
+                else:
+                    free_eligible.append(f"  - {role}: {name} (Free & Eligible)")
+            else:
+                avail = person.get_availability(day)
+                start_idx = Person.time_to_index(start_time, person._base_start_minutes, person._slot_minutes)
+                end_idx = Person.time_to_index(end_time, person._base_start_minutes, person._slot_minutes)
+
+                slots = avail[start_idx:end_idx] if 0 <= start_idx < len(avail) else []
+                if 1 in slots:
+                    # Find what they are assigned to
+                    assigned_to = []
+                    if duties_for_day:
+                        for d_id, d_info in duties_for_day.items():
+                            if any(a.get_name() == name for a in d_info.get(DUTY_ASSIGNEES, [])):
+                                try:
+                                    d_s = Person._time_to_minutes(d_info[DUTY_START_TIME])
+                                    d_e = Person._time_to_minutes(d_info[DUTY_END_TIME])
+                                    if max(target_start_min, d_s) < min(target_end_min, d_e):
+                                        assigned_to.append(f"{d_info.get(DUTY_ACTIVITY)} [{d_info.get(DUTY_START_TIME)}-{d_info.get(DUTY_END_TIME)}]")
+                                except Exception:
+                                    continue
+                    assigned_msg = f"Assigned to: {', '.join(assigned_to)}" if assigned_to else "Working on another duty"
+                    engaged_staff.append(f"  - {role}: {name} ({assigned_msg})")
+                elif all(s == -1 for s in slots) or not slots:
+                    unavailable_staff.append(f"  - {role}: {name} (Not in school / Not scheduled)")
+                else:
+                    unavailable_staff.append(f"  - {role}: {name} (Partially unavailable during slot)")
+
+        lines.append("")
+        lines.append(f"--- Staff Status during Timeframe ({start_time} - {end_time}) ---")
+        lines.append(f"  Available & Engaged Staff ({len(engaged_staff)}):")
+        lines.extend(engaged_staff or ["    (None)"])
+        if free_eligible:
+            lines.append(f"  Available & Eligible Staff ({len(free_eligible)}):")
+            lines.extend(free_eligible)
+        if free_disqualified:
+            lines.append(f"  Available but Disqualified Staff ({len(free_disqualified)}):")
+            lines.extend(free_disqualified)
+        lines.append(f"  Unavailable / Absent Staff ({len(unavailable_staff)}):")
+        lines.extend(unavailable_staff or ["    (None)"])
+
+        return "\n".join(lines)
 
     @staticmethod
     def _write_roster_to_excel(roster: dict, finalized_teacher_list: Queue, finalized_temp_list: Queue) -> None:

@@ -459,5 +459,11 @@ def test_scheduler_optimize_duty_assignment_raises_value_error_on_failure():
     with pytest.raises(ValueError) as exc_info:
         scheduler._optimize_duty_assignment(teacher_queue, temp_queue)
 
-    assert "Unable to find sufficient staff for Supervision" in str(exc_info.value)
+    err_msg = str(exc_info.value)
+    assert "Unable to find sufficient staff for Supervision" in err_msg
+    assert "--- Target Duty Details ---" in err_msg
+    assert "--- Concurrent Duties in Timeframe" in err_msg
+    assert "--- Staff Status during Timeframe" in err_msg
+    assert "Available & Engaged Staff" in err_msg
+
 
