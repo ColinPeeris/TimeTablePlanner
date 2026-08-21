@@ -377,6 +377,57 @@ class Scheduler:
         # Status of 1 means "working"
         return availability[start_index - 1] == 1
 
+    def _would_violate_lunch_rest(self, person: Person, day: str, duty_start_time: str, duty_end_time: str) -> bool:
+        """
+        Check whether assigning this duty to the person would cause them to have
+        fewer than the required minimum rest slots during the configured lunch window.
+
+        Args:
+            person (Person): The staff candidate.
+            day (str): Day identifier.
+            duty_start_time (str): Start time of duty in HHMM format.
+            duty_end_time (str): End time of duty in HHMM format.
+
+        Returns:
+            bool: True if assignment would reduce remaining lunch rest slots below
+                the minimum required, False otherwise.
+        """
+        min_rest_slots = getattr(self, "_lunch_break_min_rest_slots", 0)
+        if min_rest_slots <= 0:
+            return False
+
+        if not hasattr(self, "_lunch_break_start") or not hasattr(self, "_lunch_break_end"):
+            return False
+
+        if not self._is_lunch_window_applicable(person, day):
+            return False
+
+        avail = person.get_availability(day)
+        if not avail:
+            return False
+
+        start_idx = Person.time_to_index(duty_start_time, person._base_start_minutes, person._slot_minutes)
+        end_idx = Person.time_to_index(duty_end_time, person._base_start_minutes, person._slot_minutes)
+        lunch_start_idx = Person.time_to_index(self._lunch_break_start, person._base_start_minutes, person._slot_minutes)
+        lunch_end_idx = Person.time_to_index(self._lunch_break_end, person._base_start_minutes, person._slot_minutes)
+
+        overlap_start = max(start_idx, lunch_start_idx)
+        overlap_end = min(end_idx, lunch_end_idx)
+
+        # If duty overlaps with the lunch window, simulate occupying those slots
+        if overlap_start < overlap_end:
+            current_lunch_slots = avail[lunch_start_idx:lunch_end_idx]
+            simulated_slots = list(current_lunch_slots)
+            for i in range(overlap_start - lunch_start_idx, overlap_end - lunch_start_idx):
+                if 0 <= i < len(simulated_slots):
+                    simulated_slots[i] = 1
+
+            remaining_rest = simulated_slots.count(0)
+            if remaining_rest < min_rest_slots:
+                return True
+
+        return False
+
     def _assign_staff_to_duty(
         self,
         day: str,
@@ -457,28 +508,40 @@ class Scheduler:
                 else:
                     raise ValueError(f"Unknown staff preference: {preference}")
 
-            # --- Selection Logic ---
+            # --- Selection Logic with Proactive Lunch Rest Protection ---
             selected_person = None
             duty_start_time = duty_info[DUTY_START_TIME]
+            duty_end_time = duty_info[DUTY_END_TIME]
             duty_start_minutes = Person._time_to_minutes(duty_start_time)
             lunch_start_minutes = Person._time_to_minutes(self._lunch_break_start)
             lunch_end_minutes = Person._time_to_minutes(self._lunch_break_end)
 
             is_during_lunch = lunch_start_minutes <= duty_start_minutes < lunch_end_minutes
 
-            if is_during_lunch:
-                # --- Two-Pass Selection for lunch window ---
-                # 1. First Pass: Try to find a rested person
-                def rested_filter(person):
-                    return base_person_filter(person) and not self._was_working_before(person, day, duty_start_time)
+            # Pass 1: Ideal candidate — qualified, maintains minimum lunch rest budget, and not working immediately before
+            def pass1_filter(person):
+                if not base_person_filter(person):
+                    return False
+                if self._would_violate_lunch_rest(person, day, duty_start_time, duty_end_time):
+                    return False
+                if is_during_lunch and self._was_working_before(person, day, duty_start_time):
+                    return False
+                return True
 
-                selected_person = select_person(rested_filter)
+            selected_person = select_person(pass1_filter)
 
-                # 2. Second Pass: If no rested person, find anyone available
-                if not selected_person:
-                    selected_person = select_person(base_person_filter)
-            else:
-                # --- Single-Pass Selection outside lunch window ---
+            # Pass 2: Qualified candidate who maintains minimum lunch rest budget (relaxing the 'working before' check)
+            if not selected_person:
+                def pass2_filter(person):
+                    return (
+                        base_person_filter(person)
+                        and not self._would_violate_lunch_rest(person, day, duty_start_time, duty_end_time)
+                    )
+
+                selected_person = select_person(pass2_filter)
+
+            # Pass 3: Fallback if strictly necessary (relaxing lunch rest budget so highly constrained slots still attempt assignment)
+            if not selected_person:
                 selected_person = select_person(base_person_filter)
 
             # --- Assignment ---
@@ -620,7 +683,9 @@ class Scheduler:
                     reasons.append(f"missing required function '{req_func}'")
                 if restr_func and hasattr(self, "_staff_attributes") and self._staff_attributes.has_restriction(name, restr_func):
                     reasons.append(f"has restriction '{restr_func}'")
-                if is_during_lunch and hasattr(self, "_was_working_before") and self._was_working_before(person, day, start_time):
+                if hasattr(self, "_would_violate_lunch_rest") and self._would_violate_lunch_rest(person, day, start_time, end_time):
+                    reasons.append("assignment would exhaust required minimum lunch rest slots")
+                elif is_during_lunch and hasattr(self, "_was_working_before") and self._was_working_before(person, day, start_time):
                     reasons.append("worked immediately prior in lunch window")
 
                 if reasons:

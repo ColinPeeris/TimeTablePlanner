@@ -101,3 +101,39 @@ def test_ignores_rested_preference_outside_lunch_window(scheduler_with_lunch_bre
     assert result is True
     assert len(duty_info[DUTY_ASSIGNEES]) == 1
     assert duty_info[DUTY_ASSIGNEES][0].get_name() == "Bob"
+
+
+def test_prefers_staff_who_will_not_exhaust_lunch_rest_budget():
+    """
+    Verify that a staff member who has plenty of lunch rest slots is preferred over
+    a staff member who would exhaust their remaining lunch rest budget.
+    """
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "1100"
+    scheduler._lunch_break_end = "1300" # 4 slots: 1100, 1130, 1200, 1230
+    scheduler._lunch_break_min_rest_slots = 1
+
+    teacher_queue = Queue()
+    # Emily is already working 1100-1230 (3 slots), so only 1 rest slot (1230-1300) remains.
+    # Assigning 1230-1300 to Emily would reduce her rest slots to 0 (< 1).
+    teacher_queue.add_to_queue("Emily", "Monday", "1100", "1230", 1)
+    teacher_queue.add_to_queue("Emily", "Monday", "1230", "1300", 0)
+
+    # Ferninda is resting 1100-1300 (4 rest slots).
+    teacher_queue.add_to_queue("Ferninda", "Monday", "1100", "1300", 0)
+
+    duty_info = {
+        DUTY_START_TIME: "1230",
+        DUTY_END_TIME: "1300",
+        DUTY_ASSIGNEES: [],
+    }
+
+    result = scheduler._assign_staff_to_duty(
+        "Monday", duty_info, teacher_queue, Queue(), required_count=1, ideal_case=False
+    )
+
+    assert result is True
+    assert len(duty_info[DUTY_ASSIGNEES]) == 1
+    # Ferninda should be chosen instead of Emily to protect Emily's lunch rest slot
+    assert duty_info[DUTY_ASSIGNEES][0].get_name() == "Ferninda"
