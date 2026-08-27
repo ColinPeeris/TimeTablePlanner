@@ -235,48 +235,92 @@ def test_scheduler_get_staff_attributes_from_excel_reads_required_and_restricted
 
 def test_scheduler_get_staff_availability_reads_excel(tmp_path):
     file_path = tmp_path / "availability.xlsx"
+
     with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
         pd.DataFrame(
             [
-                ["Monday", "AM", "Alice"],
-                ["Tuesday", "PM", "Bob"],
+                ["Teacher", "Monday", "AM", "Alice"],
+                ["Teacher", "Tuesday", "PM", "Bob"],
             ],
-            columns=["Day", "Session", "Name"],
-        ).to_excel(writer, sheet_name="Teachers", index=False)
+            columns=["Staff Type", "Day", "Session", "Name"],
+        ).to_excel(writer, sheet_name="Sheet1", index=False)
 
         pd.DataFrame(
             [
-                ["Wednesday", "AM", "Carol"],
-                ["Thursday", "PM", "Dave"],
+                ["Temp", "Wednesday", "AM", "Carol"],
+                ["Temp", "Thursday", "PM", "Dave"],
             ],
-            columns=["Day", "Session", "Name"],
-        ).to_excel(writer, sheet_name="Temps", index=False)
+            columns=["Staff Type", "Day", "Session", "Name"],
+        ).to_excel(writer, sheet_name="Sheet2", index=False)
 
         pd.DataFrame(
             [
-                ["Friday", "AM", "Eve"],
+                ["CH", "Friday", "AM", "Eve"],
             ],
-            columns=["Day", "Session", "Name"],
-        ).to_excel(writer, sheet_name="CH", index=False)
+            columns=["Staff Type", "Day", "Session", "Name"],
+        ).to_excel(writer, sheet_name="Sheet3", index=False)
 
     result = Scheduler._get_staff_availability(str(file_path))
+
     assert len(result) == 3
-    assert "Teachers" in result
-    assert "Temps" in result
+    assert "Teacher" in result
+    assert "Temp" in result
     assert "CH" in result
-    teachers = result["Teachers"]
-    temps = result["Temps"]
+
+    teachers = result["Teacher"]
+    temps = result["Temp"]
     ch = result["CH"]
+
     assert len(teachers) == 2
     assert len(temps) == 2
     assert len(ch) == 1
-    assert teachers[0] == ["Monday", "AM", "Alice"]
-    assert teachers[1] == ["Tuesday", "PM", "Bob"]
-    assert temps[0] == ["Wednesday", "AM", "Carol"]
-    assert temps[1] == ["Thursday", "PM", "Dave"]
-    assert ch[0] == ["Friday", "AM", "Eve"]
+
+    assert teachers[0] == ["Teacher", "Monday", "AM", "Alice"]
+    assert teachers[1] == ["Teacher", "Tuesday", "PM", "Bob"]
+
+    assert temps[0] == ["Temp", "Wednesday", "AM", "Carol"]
+    assert temps[1] == ["Temp", "Thursday", "PM", "Dave"]
+
+    assert ch[0] == ["CH", "Friday", "AM", "Eve"]
 
 
+def test_scheduler_get_staff_availability_combines_staff_types_across_sheets(tmp_path):
+    file_path = tmp_path / "availability.xlsx"
+
+    with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+        pd.DataFrame(
+            [
+                ["Teacher", "Monday", "AM", "Alice"],
+                ["Teacher", "Tuesday", "PM", "Bob"],
+            ],
+            columns=["Staff Type", "Day", "Session", "Name"],
+        ).to_excel(writer, sheet_name="Sheet1", index=False)
+
+        pd.DataFrame(
+            [
+                ["Teacher", "Wednesday", "AM", "Carol"],
+                ["Temp", "Thursday", "PM", "Dave"],
+            ],
+            columns=["Staff Type", "Day", "Session", "Name"],
+        ).to_excel(writer, sheet_name="Sheet2", index=False)
+
+    result = Scheduler._get_staff_availability(str(file_path))
+
+    assert len(result) == 2
+    assert "Teacher" in result
+    assert "Temp" in result
+
+    assert result["Teacher"] == [
+        ["Teacher", "Monday", "AM", "Alice"],
+        ["Teacher", "Tuesday", "PM", "Bob"],
+        ["Teacher", "Wednesday", "AM", "Carol"],
+    ]
+
+    assert result["Temp"] == [
+        ["Temp", "Thursday", "PM", "Dave"],
+    ]
+
+    
 def test_scheduler_get_duties_list_from_excel_populates_duty_roster(tmp_path):
     file_path = tmp_path / "duties.xlsx"
     duties = pd.DataFrame(

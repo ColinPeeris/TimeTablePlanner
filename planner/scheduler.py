@@ -944,19 +944,33 @@ class Scheduler:
     @staticmethod
     def _get_staff_availability(file_name: str) -> Dict[str, List]:
         """
-        Load staff availability from an Excel file with any number of sheets (staff types).
+        Load staff availability from an Excel file with any number of sheets.
+
+        Rows from all sheets are grouped by their "Staff Type". If the same
+        staff type appears in multiple sheets, the rows are combined.
 
         Args:
             file_name (str): Path to the Excel file containing staff availability.
 
         Returns:
-            dict: Mapping of sheet names to list of rows.
+            Dict[str, List]: Mapping of staff type to list of rows.
         """
-        sheet_names = pd.ExcelFile(file_name).sheet_names
-        staff_dict = {}
-        for sheet_name in sheet_names:
-            df = pd.read_excel(file_name, sheet_name=sheet_name)
-            staff_dict[sheet_name] = df.values.tolist()
+        staff_dict: Dict[str, List] = {}
+
+        excel_file = pd.ExcelFile(file_name)
+
+        for sheet_name in excel_file.sheet_names:
+            df = pd.read_excel(excel_file, sheet_name=sheet_name)
+
+            if "Staff Type" not in df.columns:
+                raise ValueError(
+                    f"Sheet '{sheet_name}' does not contain a 'Staff Type' column."
+                )
+
+            for staff_type, group in df.groupby("Staff Type"):
+                rows = group.values.tolist()
+                staff_dict.setdefault(staff_type, []).extend(rows)
+
         return staff_dict
 
     def _get_duties_list_from_excel(self, file_name):
