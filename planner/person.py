@@ -20,8 +20,9 @@ class Person:
     are loaded from the central configuration.
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, staff_type: str = None):
         self._name = name
+        self._staff_type = staff_type
         self._availability_by_hour = {}
         self._days_assigned = []
         self._duties_by_day = {}
@@ -135,6 +136,14 @@ class Person:
     def get_name(self) -> str:
         """Return the person's name."""
         return self._name
+
+    def get_staff_type(self) -> str:
+        """Return the person's staff type/role."""
+        return self._staff_type
+
+    def set_staff_type(self, staff_type: str) -> None:
+        """Set the person's staff type/role."""
+        self._staff_type = staff_type
 
     def get_availability(self, day: str) -> List[int]:
         """Return the availability array for a specific day."""

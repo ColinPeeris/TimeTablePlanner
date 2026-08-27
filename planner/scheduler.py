@@ -1,6 +1,6 @@
 import copy
+import re
 from typing import Any, Dict, List, Optional, Tuple, Union
-from enum import Enum
 
 import pandas as pd
 
@@ -31,12 +31,6 @@ from .utils.configs import (
 from .schedule_state import ScheduleState
 from .state_serializer import StateSerializer
 from report_generator import ReportGenerator
-
-
-class StaffPreference(Enum):
-    TEACHER_FIRST = "Teacher First"
-    TEMP_FIRST = "Temp First"
-    NO_PREFERENCE = "No Preference"
 
 
 class Scheduler:
@@ -94,18 +88,17 @@ class Scheduler:
         self._lunch_break_end = LUNCH_BREAK_END
         self._lunch_break_min_rest_slots = LUNCH_BREAK_MIN_REST_SLOTS
 
-        teachers_list, temps_list = self._get_staff_availability("AvailabilityList.xlsx")
+        all_staff_availability = self._get_staff_availability("AvailabilityList.xlsx")
         self._duty_roster = DutyRoster()
         self._get_duties_list_from_excel("DutiesBreakdown.xlsx")
-        teacher_list = Queue()
-        temp_list = Queue()
-        self._add_to_queue(teacher_list, teachers_list)
-        self._add_to_queue(temp_list, temps_list)
 
-        schedule_state = self._optimize_duty_assignment(
-            teacher_list,
-            temp_list
-        )
+        staff_queues = {}
+        for staff_type, staff_list in all_staff_availability.items():
+            queue = Queue()
+            self._add_to_queue(queue, staff_list, staff_type=staff_type)
+            staff_queues[staff_type] = queue
+
+        schedule_state = self._optimize_duty_assignment(staff_queues)
 
         if schedule_state is None:
             raise ValueError(
@@ -152,57 +145,114 @@ class Scheduler:
                 restriction.strip()
             )
 
-    def _add_to_queue(self, queue, staff_list):
+    def _add_to_queue(self, queue, staff_list, staff_type: str = None):
         """Convert Excel rows into queue entries and normalize time values.
 
         Args:
             queue (Queue): The queue to populate with staff availability.
             staff_list (list): Rows containing day, session, name, start time, and end time.
+            staff_type (str, optional): Default staff type for entries in this queue.
         """
         for row in staff_list:
             day = f"{row[0]}_{str(row[1]).replace(' ', '_')}"
-            staff_name = row[2].strip()
+            staff_name = str(row[2]).strip()
             start_time = str(Person.normalize_time(row[3])).zfill(4)
             end_time = str(Person.normalize_time(row[4])).zfill(4)
+            row_staff_type = str(row[5]).strip() if len(row) > 5 and row[5] is not None and not (isinstance(row[5], float) and pd.isna(row[5])) else staff_type
             queue.add_to_queue(
                 staff_member=staff_name,
                 day=day,
                 start_time=start_time,
                 end_time=end_time,
-                status=0
+                status=0,
+                staff_type=row_staff_type or staff_type
             )
 
     @staticmethod
-    def _order_duties_for_assignment(duties, teacher_list, temp_list, staff_attributes):
+    def _order_queues_by_preference(staff_queues: Dict[str, Queue], preference: Optional[str]) -> List[Queue]:
+        """Return staff queues ordered according to a preference string.
+
+        Supports single or chained staff type preferences separated by ';' or ':' or ','.
+        For example: 'teacher;temps;CH' or 'temps:CH:teacher'.
+        Validates that all specified staff types exist in staff_queues.
+        """
+        if preference is None or (isinstance(preference, float) and pd.isna(preference)):
+            return list(staff_queues.values())
+
+        pref_str = str(preference).strip()
+        if not pref_str or pref_str.lower() in ("no preference", "none", "nan"):
+            return list(staff_queues.values())
+
+        # Split by delimiters: semicolon, colon, or comma
+        raw_tokens = re.split(r"[;:,]+", pref_str)
+        tokens = [t.strip() for t in raw_tokens if t.strip()]
+
+        if not tokens:
+            return list(staff_queues.values())
+
+        valid_keys = list(staff_queues.keys())
+        ordered_keys = []
+
+        for token in tokens:
+            token_clean = token.lower()     # Ensures lowercase
+
+            if token_clean in ("no preference", "none", "nan"):
+                continue
+
+            matched_key = None
+            for k in valid_keys:
+                k_clean = k.strip().lower()
+                if k_clean == token_clean or k_clean.rstrip('s') == token_clean.rstrip('s'):
+                    matched_key = k
+                    break
+
+            if matched_key is None:
+                raise ValueError(
+                    f"Invalid staff type '{token}' in staff preference '{preference}'. "
+                    f"Valid staff types are: {valid_keys + ['No Preference']}"
+                )
+
+            if matched_key not in ordered_keys:
+                ordered_keys.append(matched_key)
+
+        # Append any remaining queues in their original order
+        for k in valid_keys:
+            if k not in ordered_keys:
+                ordered_keys.append(k)
+
+        return [staff_queues[k] for k in ordered_keys]
+
+    @staticmethod
+    def _order_duties_for_assignment(duties: dict, staff_queues: Dict[str, Queue], staff_attributes: StaffAttributes):
         """Return duties ordered by assignment priority.
 
         Duties requiring special functions or restrictions are assigned first so
         skilled staff are preserved for constrained assignments.
 
-        This method now considers the number of available staff for each duty,
+        This method considers the number of available staff across all queues for each duty,
         prioritizing duties with fewer qualified candidates.
         """
+        queues_list = list(staff_queues.values())
+
         def count_available_for_duty(duty_info):
             """Count how many people in the queues can perform a given duty."""
             required_function = duty_info.get(DUTY_REQUIRED_FUNCTION)
             restricted_function = duty_info.get(DUTY_RESTRICTED_FUNCTION)
 
             def person_filter(person):
+                if staff_attributes is None:
+                    return True
                 return (
                     staff_attributes.has_required_function(person.get_name(), required_function) and
                     not staff_attributes.has_restriction(person.get_name(), restricted_function)
                 )
 
-            teacher_count = sum(1 for p in teacher_list.get_list() if person_filter(p))
-            temp_count = sum(1 for p in temp_list.get_list() if person_filter(p))
-            return teacher_count + temp_count
+            return sum(1 for q in queues_list for p in q.get_list() if person_filter(p))
 
         return sorted(
             duties.items(),
             key=lambda item: (
-                # New: Prioritize duties with fewer available staff.
                 count_available_for_duty(item[1]),
-                # Existing criteria follow
                 0 if item[1].get(DUTY_REQUIRED_FUNCTION) is None else -1,
                 0 if item[1].get(DUTY_RESTRICTED_FUNCTION) is None else -1,
                 -(item[1].get(DUTY_MIN_REQUIREMENT) or 0),
@@ -211,37 +261,37 @@ class Scheduler:
             )
         )
 
-    def _optimize_duty_assignment(self, teacher_list, temp_list):
+    def _optimize_duty_assignment(
+        self,
+        staff_queues: Dict[str, Queue],
+    ) -> ScheduleState:
         """
         Generate and evaluate candidate duty assignments to find the best distribution.
 
-        This method performs a fixed number of iterations, each time shuffling the teacher and temp queues,
+        This method performs a fixed number of iterations, each time shuffling the staff queues,
         assigning staff to every duty slot, and computing the selected fairness metric.
         The lowest-scoring valid assignment is retained and returned.
 
         Args:
-            teacher_list (Queue): Queue of available teachers.
-            temp_list (Queue): Queue of available temps.
+            staff_queues (Dict[str, Queue]): Dictionary of queues by staff type.
 
         Returns:
-            tuple: (best_roster, best_teacher_list, best_temp_list)
+            ScheduleState: Best schedule state found.
         """
         min_metric = float("inf")
-        finalized_teacher_list = None
-        finalized_temp_list = None
+        finalized_staff_queues = None
         final_roster = None
         last_error = None
         for i in range(100):
             duty_roster = copy.deepcopy(self._duty_roster.get_duty_roster())
-            _teacher_list = copy.deepcopy(teacher_list)
-            _temp_list = copy.deepcopy(temp_list)
-            _teacher_list.shuffle()
-            _temp_list.shuffle()
+            _staff_queues = {k: copy.deepcopy(q) for k, q in staff_queues.items()}
+            for q in _staff_queues.values():
+                q.shuffle()
             assignment_successful = True
             for day in duty_roster:
-                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _teacher_list, _temp_list, self._staff_attributes):
+                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _staff_queues, self._staff_attributes):
                     assignment_result = self._assign_staff_to_duty(
-                        day, duty_info, _teacher_list, _temp_list,
+                        day, duty_info, _staff_queues,
                         duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False,
                         duties_for_day=duty_roster[day],
                         duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
@@ -254,39 +304,31 @@ class Scheduler:
                     # Stop assigning duties for the current day and move to the next iteration.
                     break
 
-                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _teacher_list, _temp_list, self._staff_attributes):
-                    # If the duty has fewer than the ideal number of assignees, attempt to assign additional staff to
-                    # reach the ideal case.
+                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _staff_queues, self._staff_attributes):
                     if duty_info[DUTY_MIN_REQUIREMENT] < duty_info[DUTY_IDEAL_CASE]:
-                        # For ideal case, we don't care about the return value as it's optional.
                         self._assign_staff_to_duty(
-                            day, duty_info, _teacher_list, _temp_list,
+                            day, duty_info, _staff_queues,
                             duty_info[DUTY_IDEAL_CASE] - duty_info[DUTY_MIN_REQUIREMENT],
                             ideal_case=True,
                             duties_for_day=duty_roster[day],
                             duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
 
             if not assignment_successful:
-                # Skip to the next iteration if the assignment was not successful.
+                # Move to next iteration if no staff assigned to a duty
                 continue
 
-            # Enforce any configured post-assignment checks before evaluating fairness.
-            lunch_check_result = self._lunch_provider_satisfied(_teacher_list, duty_roster)
+            lunch_check_result = self._lunch_provider_satisfied(_staff_queues, duty_roster)
             if lunch_check_result is not True:
-                # If the check fails, it returns an error string. Store it.
                 last_error = lunch_check_result
                 continue
 
-            # Choose fairness metric according to configuration
-            combined_people = _teacher_list.get_list() + _temp_list.get_list()
+            combined_people = [p for q in _staff_queues.values() for p in q.get_list()]
             days = sorted(duty_roster.keys())
 
             if self._fairness_mode == "week":
-                # Original behaviour: combined std deviation for teachers + temps
-                metric = _teacher_list.find_std_deviation() + _temp_list.find_std_deviation()
+                metric = sum(q.find_std_deviation() for q in _staff_queues.values())
 
             else:
-                # Compute daily std deviations across combined_people for each day
                 import math
 
                 daily_stds = []
@@ -308,8 +350,7 @@ class Scheduler:
 
             if metric < min_metric:
                 min_metric = metric
-                finalized_teacher_list = copy.deepcopy(_teacher_list)
-                finalized_temp_list = copy.deepcopy(_temp_list)
+                finalized_staff_queues = copy.deepcopy(_staff_queues)
                 final_roster = duty_roster
 
         if final_roster is None:
@@ -319,30 +360,31 @@ class Scheduler:
                 "Unable to generate a valid schedule after multiple attempts. All generated schedules failed."
             )
 
-        return ScheduleState(final_roster, finalized_teacher_list, finalized_temp_list)
+        return ScheduleState(final_roster, finalized_staff_queues)
 
-    def _lunch_provider_satisfied(self, teacher_list, duty_roster):
-        """Validate that teachers receive the configured minimum rest slots in the lunch window.
+    def _lunch_provider_satisfied(self, staff_queues: Dict[str, Queue], duty_roster: dict):
+        """Validate that staff receive the configured minimum rest slots in the lunch window.
 
         Returns:
             True if satisfied, otherwise an error string with failure details.
         """
-        for teacher in teacher_list.get_list():
-            for day_key in sorted(duty_roster.keys()):
-                if not self._is_lunch_window_applicable(teacher, day_key):
-                    continue
-                rest_slots = self._count_rest_slots_during_window(
-                    teacher,
-                    day_key,
-                    self._lunch_break_start,
-                    self._lunch_break_end,
-                )
-                if rest_slots < self._lunch_break_min_rest_slots:
-                    return (
-                        f"Lunch break validation failed for {teacher.get_name()} on {day_key}. "
-                        f"Required {self._lunch_break_min_rest_slots} rest slots between "
-                        f"{self._lunch_break_start} and {self._lunch_break_end}, but found only {rest_slots}."
+        for q in staff_queues.values():
+            for person in q.get_list():
+                for day_key in sorted(duty_roster.keys()):
+                    if not self._is_lunch_window_applicable(person, day_key):
+                        continue
+                    rest_slots = self._count_rest_slots_during_window(
+                        person,
+                        day_key,
+                        self._lunch_break_start,
+                        self._lunch_break_end,
                     )
+                    if rest_slots < self._lunch_break_min_rest_slots:
+                        return (
+                            f"Lunch break validation failed for {person.get_name()} on {day_key}. "
+                            f"Required {self._lunch_break_min_rest_slots} rest slots between "
+                            f"{self._lunch_break_start} and {self._lunch_break_end}, but found only {rest_slots}."
+                        )
         return True
 
     @staticmethod
@@ -427,49 +469,25 @@ class Scheduler:
                 return True
 
         return False
-
     def _assign_staff_to_duty(
         self,
         day: str,
         duty_info: dict,
-        teacher_list: Queue,
-        temp_list: Queue,
+        staff_queues: Dict[str, Queue],
         required_count: int,
-        ideal_case: bool,
+        ideal_case: bool = False,
         duties_for_day: Optional[dict] = None,
         duty_name: Optional[str] = None,
     ) -> Union[bool, str]:
         """
         Assign available staff members to a specified duty slot.
 
-        Selects staff members from the teacher and temp queues based on staff preferences,
+        Selects staff members from the staff queues based on staff preferences,
         required/restricted qualifications, and lunch-break rest constraints. Assigned staff
         have their workloads and schedules updated.
-
-        Args:
-            day (str): The day identifier for the duty (e.g., 'Wednesday_2026-08-19_00:00:00').
-            duty_info (dict): Dictionary containing duty metadata (time, assignees, requirements).
-            teacher_list (Queue): Queue of teacher staff members.
-            temp_list (Queue): Queue of temporary staff members.
-            required_count (int): Number of staff members to assign.
-            ideal_case (bool): Whether this assignment is for optional ideal capacity (True)
-                or mandatory minimum requirement (False).
-            duties_for_day (Optional[dict]): All duties scheduled for the given day. Defaults to None.
-            duty_name (Optional[str]): Human-readable name of the duty activity. Defaults to None.
-
-        Returns:
-            Union[bool, str]: True if the requested number of staff was successfully assigned
-                (or if ideal_case is True), otherwise an error string detailing the failure.
         """
         duty_name = duty_name or duty_info.get(DUTY_ACTIVITY, "Duty")
-
-        preference = duty_info.get(
-            DUTY_STAFF_PREFERENCE,
-            StaffPreference.NO_PREFERENCE.value
-        )
-        if preference is None or (isinstance(preference, float) and pd.isna(preference)):
-            preference = StaffPreference.NO_PREFERENCE.value
-
+        preference = duty_info.get(DUTY_STAFF_PREFERENCE)
         required_function = duty_info.get(DUTY_REQUIRED_FUNCTION)
         restricted_function = duty_info.get(DUTY_RESTRICTED_FUNCTION)
 
@@ -486,27 +504,16 @@ class Scheduler:
             )
         )
 
+        ordered_queues = self._order_queues_by_preference(staff_queues, preference)
+
         for _ in range(int(required_count)):
             # This function will try to select a person based on the preference order.
             def select_person(person_filter):
-                if preference == StaffPreference.TEACHER_FIRST.value:
-                    person = teacher_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
-                    if not person:
-                        person = temp_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
-                    return person
-                elif preference == StaffPreference.TEMP_FIRST.value:
-                    person = temp_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
-                    if not person:
-                        person = teacher_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
-                    return person
-                elif preference == StaffPreference.NO_PREFERENCE.value:
-                    # Default to Teacher First for no preference
-                    person = teacher_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
-                    if not person:
-                        person = temp_list.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
-                    return person
-                else:
-                    raise ValueError(f"Unknown staff preference: {preference}")
+                for q in ordered_queues:
+                    person = q.select_available_person(day, duty_info[DUTY_START_TIME], duty_info[DUTY_END_TIME], person_filter)
+                    if person is not None:
+                        return person
+                return None
 
             # --- Selection Logic with Proactive Lunch Rest Protection ---
             selected_person = None
@@ -557,8 +564,7 @@ class Scheduler:
                 return self._format_insufficient_staff_error(
                     day=day,
                     duty_info=duty_info,
-                    teacher_list=teacher_list,
-                    temp_list=temp_list,
+                    staff_queues=staff_queues,
                     duties_for_day=duties_for_day,
                     duty_name=duty_name
                 )
@@ -571,8 +577,7 @@ class Scheduler:
         self,
         day: str,
         duty_info: dict,
-        teacher_list: Queue,
-        temp_list: Queue,
+        staff_queues: Dict[str, Queue],
         duties_for_day: Optional[dict] = None,
         duty_name: Optional[str] = None,
     ) -> str:
@@ -580,19 +585,8 @@ class Scheduler:
         Format a detailed diagnostic error message when staff assignment fails.
 
         Provides a breakdown of the target duty requirements, concurrent duties in the
-        same timeframe with their assigned staff, and the status of all teachers/temps
+        same timeframe with their assigned staff, and the status of all staff
         (engaged, disqualified, or unavailable).
-
-        Args:
-            day (str): Day key where assignment failed.
-            duty_info (dict): Duty configuration and state dictionary.
-            teacher_list (Queue): Teacher queue.
-            temp_list (Queue): Temp queue.
-            duties_for_day (Optional[dict]): All duties for this day.
-            duty_name (Optional[str]): Human-readable name of the duty.
-
-        Returns:
-            str: Multi-line diagnostic error message.
         """
         duty_name = duty_name or duty_info.get(DUTY_ACTIVITY, "Duty")
         start_time = duty_info.get(DUTY_START_TIME, "??")
@@ -601,7 +595,7 @@ class Scheduler:
         ideal_count = duty_info.get(DUTY_IDEAL_CASE, req_count)
         req_func = duty_info.get(DUTY_REQUIRED_FUNCTION)
         restr_func = duty_info.get(DUTY_RESTRICTED_FUNCTION)
-        pref = duty_info.get(DUTY_STAFF_PREFERENCE, StaffPreference.NO_PREFERENCE.value)
+        pref = duty_info.get(DUTY_STAFF_PREFERENCE, "No Preference")
 
         currently_assigned = [p.get_name() for p in duty_info.get(DUTY_ASSIGNEES, [])]
         assigned_str = ", ".join(currently_assigned) if currently_assigned else "None"
@@ -661,9 +655,7 @@ class Scheduler:
                 lines.append(f"  {idx}. {d_act}{d_id_str} [{d_s} - {d_e}] | Min: {d_min}, Ideal: {d_ideal}{d_rf_str}{d_restr_str} | Assigned: {d_assignees_str}")
 
         # 2. Staff Status during the timeframe
-        teacher_persons = teacher_list.get_list() if teacher_list else []
-        temp_persons = temp_list.get_list() if temp_list else []
-        all_staff = [("Teacher", p) for p in teacher_persons] + [("Temp", p) for p in temp_persons]
+        all_staff = [(role, p) for role, q in staff_queues.items() for p in q.get_list()]
 
         lunch_start_minutes = Person._time_to_minutes(self._lunch_break_start) if hasattr(self, "_lunch_break_start") else 0
         lunch_end_minutes = Person._time_to_minutes(self._lunch_break_end) if hasattr(self, "_lunch_break_end") else 0
@@ -734,14 +726,13 @@ class Scheduler:
         return "\n".join(lines)
 
     @staticmethod
-    def _write_roster_to_excel(roster: dict, finalized_teacher_list: Queue, finalized_temp_list: Queue) -> None:
+    def _write_roster_to_excel(roster: dict, finalized_staff_queues: Dict[str, Queue]) -> None:
         """
         Write the finalized duty roster and work distribution to an Excel file.
 
         Args:
             roster (dict): The selected duty schedule keyed by day.
-            finalized_teacher_list (Queue): Final teacher queue with updated workload state.
-            finalized_temp_list (Queue): Final temp queue with updated workload state.
+            finalized_staff_queues (Dict[str, Queue]): Final staff queues dictionary.
 
         Output:
             Creates `teacher_schedule_with_duties.xlsx` with two sheets:
@@ -759,20 +750,19 @@ class Scheduler:
         for day, duties in teachers_by_day.items():
             for duty, duty_teachers in duties:
                 data_for_excel.append([day, duty] + duty_teachers)
+
+        people_list = [p for q in finalized_staff_queues.values() for p in q.get_list()]
+
         people = []
         number_of_duties_taken = []
         hours_worked_list = []
         hours_in_school_list = []
-        for person in finalized_temp_list.get_list():
+        for person in people_list:
             people.append(person.get_name())
             number_of_duties_taken.append(person.get_work_capacity_ratio())
             hours_worked_list.append(person.get_hours_worked())
             hours_in_school_list.append(person.get_hours_in_school())
-        for person in finalized_teacher_list.get_list():
-            people.append(person.get_name())
-            number_of_duties_taken.append(person.get_work_capacity_ratio())
-            hours_worked_list.append(person.get_hours_worked())
-            hours_in_school_list.append(person.get_hours_in_school())
+
         work_distribution = pd.DataFrame(
             {
                 "Person": people,
@@ -792,8 +782,7 @@ class Scheduler:
     @staticmethod
     def _write_roster_to_excel_2(
         roster: dict,
-        finalized_teacher_list: Queue,
-        finalized_temp_list: Queue,
+        finalized_staff_queues: Dict[str, Queue],
     ) -> None:
 
         import pandas as pd
@@ -858,14 +847,11 @@ class Scheduler:
         # Build Work Distribution sheet
         ###############################################################
 
-        people_rows = []
-
-        people = (
-            finalized_teacher_list.get_list()
-            + finalized_temp_list.get_list()
-        )
+        people = [p for q in finalized_staff_queues.values() for p in q.get_list()]
 
         all_days = sorted(roster.keys())
+
+        people_rows = []
 
         for person in people:
 
@@ -956,24 +942,22 @@ class Scheduler:
                     )
 
     @staticmethod
-    def _get_staff_availability(file_name: str) -> Tuple[List, List]:
+    def _get_staff_availability(file_name: str) -> Dict[str, List]:
         """
-        Load staff availability from an Excel file with two sheets: "Teachers" and "Temps".
+        Load staff availability from an Excel file with any number of sheets (staff types).
 
         Args:
             file_name (str): Path to the Excel file containing staff availability.
 
         Returns:
-            tuple:  (teachers_list, temps_list) where each list contains rows of
-                    [Day, Session, Name, Start Time, End Time].
+            dict: Mapping of sheet names to list of rows.
         """
-        df_teachers = pd.read_excel(file_name, sheet_name="Teachers")
-        df_temps = pd.read_excel(file_name, sheet_name="Temps")
-
-        return (
-            df_teachers.values.tolist(),
-            df_temps.values.tolist()
-        )
+        sheet_names = pd.ExcelFile(file_name).sheet_names
+        staff_dict = {}
+        for sheet_name in sheet_names:
+            df = pd.read_excel(file_name, sheet_name=sheet_name)
+            staff_dict[sheet_name] = df.values.tolist()
+        return staff_dict
 
     def _get_duties_list_from_excel(self, file_name):
         """

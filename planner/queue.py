@@ -20,12 +20,14 @@ class Queue:
             queue.append(Person(name=name))
         return queue
 
-    def add_to_queue(self, staff_member: str, day: str, start_time: str, end_time: str, status: int) -> None:
+    def add_to_queue(self, staff_member: str, day: str, start_time: str, end_time: str, status: int, staff_type: str = None) -> None:
         for index, entry in enumerate(self._queue):
             if entry.get_name() == staff_member:
                 self._queue[index].set_availability(day=day, start_time=start_time, end_time=end_time, status=status)
+                if staff_type and not self._queue[index].get_staff_type():
+                    self._queue[index].set_staff_type(staff_type)
                 return
-        person_to_add = Person(staff_member)
+        person_to_add = Person(staff_member, staff_type=staff_type)
         person_to_add.set_availability(day=day, start_time=start_time, end_time=end_time, status=status)
         self._queue.append(person_to_add)
 

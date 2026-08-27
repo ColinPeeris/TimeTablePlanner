@@ -40,7 +40,7 @@ def test_prefers_rested_staff_during_lunch_window(scheduler_with_lunch_break):
     }
 
     result = scheduler_with_lunch_break._assign_staff_to_duty(
-        "Monday", duty_info, teacher_queue, Queue(), required_count=1, ideal_case=False
+        "Monday", duty_info, {"Teachers": teacher_queue}, required_count=1, ideal_case=False
     )
 
     assert result is True
@@ -67,7 +67,7 @@ def test_fallback_to_non_rested_staff_during_lunch_window(scheduler_with_lunch_b
     }
 
     result = scheduler_with_lunch_break._assign_staff_to_duty(
-        "Monday", duty_info, teacher_queue, Queue(), required_count=1, ideal_case=False
+        "Monday", duty_info, {"Teachers": teacher_queue}, required_count=1, ideal_case=False
     )
 
     assert result is True
@@ -95,7 +95,7 @@ def test_ignores_rested_preference_outside_lunch_window(scheduler_with_lunch_bre
     }
 
     result = scheduler_with_lunch_break._assign_staff_to_duty(
-        "Monday", duty_info, teacher_queue, Queue(), required_count=1, ideal_case=False
+        "Monday", duty_info, {"Teachers": teacher_queue}, required_count=1, ideal_case=False
     )
 
     assert result is True
@@ -130,7 +130,7 @@ def test_prefers_staff_who_will_not_exhaust_lunch_rest_budget():
     }
 
     result = scheduler._assign_staff_to_duty(
-        "Monday", duty_info, teacher_queue, Queue(), required_count=1, ideal_case=False
+        "Monday", duty_info, {"Teachers": teacher_queue}, required_count=1, ideal_case=False
     )
 
     assert result is True

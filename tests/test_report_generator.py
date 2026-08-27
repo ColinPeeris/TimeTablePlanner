@@ -27,7 +27,7 @@ class TestReportGenerator(unittest.TestCase):
         )
 
         roster = {day: {}}
-        report = ReportGenerator(roster, teacher_queue, Queue())
+        report = ReportGenerator(roster, {"Teachers": teacher_queue})
 
         timetable = report.create_teacher_timetable()[day]
 

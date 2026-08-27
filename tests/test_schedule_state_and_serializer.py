@@ -16,10 +16,12 @@ class TestScheduleStateAndSerializer(unittest.TestCase):
         teachers.add_to_queue("Alice", "Day_AM", "0900", "1700", 0)
         temps.add_to_queue("Temp1", "Day_AM", "0900", "1700", 0)
 
-        state = ScheduleState(roster, teachers, temps)
+        staff_queues = {"Teachers": teachers, "Temps": temps}
+        state = ScheduleState(roster, staff_queues)
         self.assertIs(state.roster, roster)
-        self.assertIs(state.teachers, teachers)
-        self.assertIs(state.temps, temps)
+        self.assertIs(state.staff_queues["Teachers"], teachers)
+        self.assertIs(state.staff_queues["Temps"], temps)
+        self.assertEqual(len(state.get_all_people()), 2)
 
     def test_state_serializer_roundtrip(self):
         roster = {"Day_AM": {"Duty": {"start_time": "0900", "end_time": "0930", "assignees": []}}}
@@ -28,7 +30,8 @@ class TestScheduleStateAndSerializer(unittest.TestCase):
         teachers.add_to_queue("Alice", "Day_AM", "0900", "1700", 0)
         temps.add_to_queue("Temp1", "Day_AM", "0900", "1700", 0)
 
-        state = ScheduleState(roster, teachers, temps)
+        staff_queues = {"Teachers": teachers, "Temps": temps}
+        state = ScheduleState(roster, staff_queues)
 
         fd, path = tempfile.mkstemp(suffix=".state")
         os.close(fd)
@@ -38,8 +41,8 @@ class TestScheduleStateAndSerializer(unittest.TestCase):
 
             # Basic equality checks
             self.assertEqual(loaded.roster, state.roster)
-            self.assertEqual([p.get_name() for p in loaded.teachers.get_list()], [p.get_name() for p in state.teachers.get_list()])
-            self.assertEqual([p.get_name() for p in loaded.temps.get_list()], [p.get_name() for p in state.temps.get_list()])
+            self.assertEqual([p.get_name() for p in loaded.staff_queues["Teachers"].get_list()], [p.get_name() for p in state.staff_queues["Teachers"].get_list()])
+            self.assertEqual([p.get_name() for p in loaded.staff_queues["Temps"].get_list()], [p.get_name() for p in state.staff_queues["Temps"].get_list()])
         finally:
             try:
                 os.remove(path)

@@ -17,7 +17,7 @@ class TestEndToEndIntegration(unittest.TestCase):
         teachers.add_to_queue("Alice", "Day_AM", "0900", "1700", 0)
         temps.add_to_queue("Temp1", "Day_AM", "0900", "1700", 0)
 
-        state = ScheduleState(roster, teachers, temps)
+        state = ScheduleState(roster, {"Teachers": teachers, "Temps": temps})
 
         fd1, xlsx_path = tempfile.mkstemp(suffix=".xlsx")
         fd2, state_path = tempfile.mkstemp(suffix=".state")

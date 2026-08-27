@@ -71,9 +71,9 @@ def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
         DUTY_ASSIGNEES: [],
         DUTY_REQUIRED_FUNCTION: None,
         DUTY_RESTRICTED_FUNCTION: None,
-        DUTY_STAFF_PREFERENCE: "Teacher First",
+        DUTY_STAFF_PREFERENCE: "Teachers",
     }
-    scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
+    scheduler._assign_staff_to_duty("Monday", duty_info, {"Teachers": teacher_queue, "Temps": temp_queue}, required_count=1, ideal_case=False)
 
     assert len(duty_info[DUTY_ASSIGNEES]) == 1
     assert duty_info[DUTY_ASSIGNEES][0].get_name() == "Teacher"
@@ -91,11 +91,10 @@ def test_scheduler_assign_staff_to_duty_raises_when_no_staff_available():
         DUTY_ASSIGNEES: [],
         DUTY_REQUIRED_FUNCTION: None,
         DUTY_RESTRICTED_FUNCTION: None,
-        DUTY_STAFF_PREFERENCE: "Teacher First",
+        DUTY_STAFF_PREFERENCE: "Teachers",
     }
 
-    # The method now returns an error string instead of raising an exception.
-    result = scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
+    result = scheduler._assign_staff_to_duty("Monday", duty_info, {"Teachers": teacher_queue, "Temps": temp_queue}, required_count=1, ideal_case=False)
     assert isinstance(result, str)
 
 
@@ -115,9 +114,9 @@ def test_scheduler_assign_staff_to_duty_uses_temp_when_temp_first():
         DUTY_ASSIGNEES: [],
         DUTY_REQUIRED_FUNCTION: None,
         DUTY_RESTRICTED_FUNCTION: None,
-        DUTY_STAFF_PREFERENCE: "Temp First",
+        DUTY_STAFF_PREFERENCE: "Temps",
     }
-    scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
+    scheduler._assign_staff_to_duty("Monday", duty_info, {"Teachers": teacher_queue, "Temps": temp_queue}, required_count=1, ideal_case=False)
 
     assert len(duty_info[DUTY_ASSIGNEES]) == 1
     assert duty_info[DUTY_ASSIGNEES][0].get_name() == "Temp"
@@ -141,9 +140,9 @@ def test_scheduler_assign_staff_to_duty_respects_required_and_restricted_functio
         DUTY_ASSIGNEES: [],
         DUTY_REQUIRED_FUNCTION: "Prefect Duty",
         DUTY_RESTRICTED_FUNCTION: "Prefect Duty",
-        DUTY_STAFF_PREFERENCE: "Teacher First",
+        DUTY_STAFF_PREFERENCE: "Teachers",
     }
-    scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
+    scheduler._assign_staff_to_duty("Monday", duty_info, {"Teachers": teacher_queue, "Temps": temp_queue}, required_count=1, ideal_case=False)
 
     assert len(duty_info["assignees"]) == 1
     assert duty_info["assignees"][0].get_name() == "Teacher"
@@ -166,7 +165,7 @@ def test_scheduler_assign_staff_to_duty_defaults_to_no_preference_when_missing()
         DUTY_REQUIRED_FUNCTION: None,
         DUTY_RESTRICTED_FUNCTION: None,
     }
-    scheduler._assign_staff_to_duty("Monday", duty_info, teacher_queue, temp_queue, required_count=1, ideal_case=False)
+    scheduler._assign_staff_to_duty("Monday", duty_info, {"Teachers": teacher_queue, "Temps": temp_queue}, required_count=1, ideal_case=False)
 
     assert len(duty_info["assignees"]) == 1
 
@@ -198,11 +197,10 @@ def test_order_duties_for_assignment_prioritizes_constrained_duties():
         },
     }
 
-    # Create empty queues for the method call
     teacher_queue = Queue()
     temp_queue = Queue()
 
-    ordered = scheduler._order_duties_for_assignment(duties, teacher_queue, temp_queue, scheduler._staff_attributes)
+    ordered = scheduler._order_duties_for_assignment(duties, {"Teachers": teacher_queue, "Temps": temp_queue}, scheduler._staff_attributes)
     ordered_names = [name for name, _ in ordered]
 
     assert ordered_names[0] in {"Prefect Duty", "Restricted Duty"}
@@ -253,15 +251,30 @@ def test_scheduler_get_staff_availability_reads_excel(tmp_path):
             ],
             columns=["Day", "Session", "Name"],
         ).to_excel(writer, sheet_name="Temps", index=False)
+
+        pd.DataFrame(
+            [
+                ["Friday", "AM", "Eve"],
+            ],
+            columns=["Day", "Session", "Name"],
+        ).to_excel(writer, sheet_name="CH", index=False)
+
     result = Scheduler._get_staff_availability(str(file_path))
-    assert len(result) == 2
-    teachers, temps = result
+    assert len(result) == 3
+    assert "Teachers" in result
+    assert "Temps" in result
+    assert "CH" in result
+    teachers = result["Teachers"]
+    temps = result["Temps"]
+    ch = result["CH"]
     assert len(teachers) == 2
     assert len(temps) == 2
+    assert len(ch) == 1
     assert teachers[0] == ["Monday", "AM", "Alice"]
     assert teachers[1] == ["Tuesday", "PM", "Bob"]
     assert temps[0] == ["Wednesday", "AM", "Carol"]
     assert temps[1] == ["Thursday", "PM", "Dave"]
+    assert ch[0] == ["Friday", "AM", "Eve"]
 
 
 def test_scheduler_get_duties_list_from_excel_populates_duty_roster(tmp_path):
@@ -344,7 +357,7 @@ def test_scheduler_write_roster_to_excel_creates_file(tmp_path, monkeypatch):
     temp_queue = Queue()
     teacher_queue.add_to_queue("Alice", "Monday", "0900", "1000", 1)
 
-    Scheduler._write_roster_to_excel(roster, teacher_queue, temp_queue)
+    Scheduler._write_roster_to_excel(roster, {"Teachers": teacher_queue, "Temps": temp_queue})
     assert (tmp_path / "teacher_schedule_with_duties.xlsx").exists()
 
 
@@ -396,27 +409,19 @@ def test_scheduler_assign_staff_to_duty_fails_when_specialized_staff_is_misalloc
         },
     }
 
-    # The current _order_duties_for_assignment prioritizes by min_requirement,
-    # so 'structured_duty' will be assigned first. If Alice is picked for it,
-    # the 'first_aid_duty' assignment will fail.
-    # We will force the order of the queue to trigger this.
     monkeypatch.setattr("planner.queue.shuffle", lambda x: None)
-
-    # The scheduler should now be smart enough to handle this.
-    # It will fail the first attempt, but the optimization loop will shuffle and retry.
-    # To test this, we'll simulate the loop's behavior.
 
     # First attempt (bad order)
     _teacher_q_1 = copy.deepcopy(teacher_queue)
     _temp_q_1 = copy.deepcopy(temp_queue)
-    ordered_duties = scheduler._order_duties_for_assignment(duties, _teacher_q_1, _temp_q_1, scheduler._staff_attributes)
+    ordered_duties = scheduler._order_duties_for_assignment(duties, {"Teachers": _teacher_q_1, "Temps": _temp_q_1}, scheduler._staff_attributes)
 
     # Manually assign the less-constrained 'structured_duty' first to simulate a bad assignment order.
     # With no shuffling, this will assign Alice and Bob.
-    scheduler._assign_staff_to_duty("Monday", duties["structured_duty"], _teacher_q_1, _temp_q_1, duties["structured_duty"][DUTY_MIN_REQUIREMENT], ideal_case=False, duty_name="Structured Classes Duty")
+    scheduler._assign_staff_to_duty("Monday", duties["structured_duty"], {"Teachers": _teacher_q_1, "Temps": _temp_q_1}, duties["structured_duty"][DUTY_MIN_REQUIREMENT], ideal_case=False, duty_name="Structured Classes Duty")
 
     # Now, attempt to assign the first_aid_duty. This should fail because Alice is no longer available.
-    result_1 = scheduler._assign_staff_to_duty("Monday", duties["first_aid_duty"], _teacher_q_1, _temp_q_1, 1, ideal_case=False, duty_name="First Aid Duty")
+    result_1 = scheduler._assign_staff_to_duty("Monday", duties["first_aid_duty"], {"Teachers": _teacher_q_1, "Temps": _temp_q_1}, 1, ideal_case=False, duty_name="First Aid Duty")
     assert isinstance(result_1, str)
     assert "Unable to find sufficient staff" in result_1
 
@@ -424,7 +429,7 @@ def test_scheduler_assign_staff_to_duty_fails_when_specialized_staff_is_misalloc
     _teacher_q_2 = copy.deepcopy(teacher_queue)
     _teacher_q_2._queue.reverse() # Move Alice to the end
     for duty_id, duty_info in ordered_duties:
-        assert scheduler._assign_staff_to_duty("Monday", duty_info, _teacher_q_2, temp_queue, duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False, duty_name=duty_info[DUTY_ACTIVITY]) is True
+        assert scheduler._assign_staff_to_duty("Monday", duty_info, {"Teachers": _teacher_q_2, "Temps": temp_queue}, duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False, duty_name=duty_info[DUTY_ACTIVITY]) is True
 
 
 def test_scheduler_optimize_duty_assignment_raises_value_error_on_failure():
@@ -457,7 +462,7 @@ def test_scheduler_optimize_duty_assignment_raises_value_error_on_failure():
     teacher_queue.add_to_queue("Teacher1", "Monday", "0800", "1700", 0)
 
     with pytest.raises(ValueError) as exc_info:
-        scheduler._optimize_duty_assignment(teacher_queue, temp_queue)
+        scheduler._optimize_duty_assignment({"Teachers": teacher_queue, "Temps": temp_queue})
 
     err_msg = str(exc_info.value)
     assert "Unable to find sufficient staff for Supervision" in err_msg
@@ -465,5 +470,103 @@ def test_scheduler_optimize_duty_assignment_raises_value_error_on_failure():
     assert "--- Concurrent Duties in Timeframe" in err_msg
     assert "--- Staff Status during Timeframe" in err_msg
     assert "Available & Engaged Staff" in err_msg
+
+
+def test_scheduler_assign_with_three_staff_types():
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._fairness_mode = "week"
+    scheduler._lunch_break_start = "1200"
+    scheduler._lunch_break_end = "1400"
+    scheduler._lunch_break_min_rest_slots = 0
+    scheduler._duty_roster = DutyRoster()
+
+    scheduler._duty_roster._add_day("Monday")
+    scheduler._duty_roster.add_duty(
+        day="Monday",
+        activity="Morning Duty",
+        session="AM",
+        start_time="0900",
+        end_time="1000",
+        min_requirement=3,
+        ideal_case=3,
+        required_function=None,
+        restricted_function=None,
+        staff_preference="No Preference",
+    )
+
+    teacher_q = Queue()
+    temp_q = Queue()
+    ch_q = Queue()
+    teacher_q.add_to_queue("Alice", "Monday", "0800", "1700", 0)
+    temp_q.add_to_queue("Bob", "Monday", "0800", "1700", 0)
+    ch_q.add_to_queue("Carol", "Monday", "0800", "1700", 0)
+
+    staff_queues = {
+        "Teachers": teacher_q,
+        "Temps": temp_q,
+        "CH": ch_q,
+    }
+
+    state = scheduler._optimize_duty_assignment(staff_queues)
+    assert state is not None
+    assert len(state.staff_queues) == 3
+    all_people = state.get_all_people()
+    assert len(all_people) == 3
+    duty_info = list(state.roster["Monday"].values())[0]
+    assignees = duty_info["assignees"]
+    assert len(assignees) == 3
+    assignee_names = {a.get_name() for a in assignees}
+    assert assignee_names == {"Alice", "Bob", "Carol"}
+
+
+def test_scheduler_preference_order_chained_types():
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
+
+    t_q = Queue()
+    temp_q = Queue()
+    ch_q = Queue()
+    t_q.add_to_queue("Teacher1", "Monday", "0900", "1000", 0)
+    temp_q.add_to_queue("Temp1", "Monday", "0900", "1000", 0)
+    ch_q.add_to_queue("CH1", "Monday", "0900", "1000", 0)
+
+    staff_queues = {
+        "Teachers": t_q,
+        "Temps": temp_q,
+        "CH": ch_q,
+    }
+
+    # Test preference: 'CH; temps; teacher'
+    ordered = scheduler._order_queues_by_preference(staff_queues, "CH; temps; teacher")
+    assert ordered == [ch_q, temp_q, t_q]
+
+    # Test preference: 'temps:CH:teacher'
+    ordered2 = scheduler._order_queues_by_preference(staff_queues, "temps:CH:teacher")
+    assert ordered2 == [temp_q, ch_q, t_q]
+
+    # Test preference: 'teacher; CH' (temps omitted, should follow at end)
+    ordered3 = scheduler._order_queues_by_preference(staff_queues, "teacher; CH")
+    assert ordered3 == [t_q, ch_q, temp_q]
+
+
+def test_scheduler_preference_invalid_type_raises_value_error():
+    scheduler = object.__new__(Scheduler)
+    staff_queues = {
+        "Teachers": Queue(),
+        "Temps": Queue(),
+        "CH": Queue(),
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        scheduler._order_queues_by_preference(staff_queues, "Astronaut; Temps")
+
+    err = str(exc_info.value)
+    assert "Invalid staff type 'Astronaut'" in err
+    assert "Valid staff types are: ['Teachers', 'Temps', 'CH', 'No Preference']" in err
+
+
 
 

@@ -53,11 +53,12 @@ class TestSchedulerStateGeneration(unittest.TestCase):
         temp_q = Queue()
         teacher_q.add_to_queue("Alice", "Day_AM", "0900", "1700", 0)
 
-        state = scheduler._optimize_duty_assignment(teacher_q, temp_q)
+        staff_queues = {"Teachers": teacher_q, "Temps": temp_q}
+        state = scheduler._optimize_duty_assignment(staff_queues)
         self.assertIsNotNone(state)
         self.assertIsInstance(state, ScheduleState)
         self.assertIn("Day_AM", state.roster)
-        self.assertEqual(len(state.teachers.get_list()), 1)
+        self.assertEqual(len(state.staff_queues["Teachers"].get_list()), 1)
 
     def test_save_and_load_state_file(self):
         scheduler = self._make_scheduler_obj()
@@ -79,7 +80,8 @@ class TestSchedulerStateGeneration(unittest.TestCase):
         temp_q = Queue()
         teacher_q.add_to_queue("Alice", "Day_AM", "0900", "1700", 0)
 
-        state = scheduler._optimize_duty_assignment(teacher_q, temp_q)
+        staff_queues = {"Teachers": teacher_q, "Temps": temp_q}
+        state = scheduler._optimize_duty_assignment(staff_queues)
 
         fd, path = tempfile.mkstemp(suffix=".state")
         os.close(fd)
@@ -102,7 +104,7 @@ class TestSchedulerStateGeneration(unittest.TestCase):
                     orig_assignees = [a.get_name() for a in duty_info.get("assignees", [])]
                     self.assertEqual(loaded_assignees, orig_assignees)
 
-            self.assertEqual([p.get_name() for p in loaded.teachers.get_list()], [p.get_name() for p in state.teachers.get_list()])
+            self.assertEqual([p.get_name() for p in loaded.staff_queues["Teachers"].get_list()], [p.get_name() for p in state.staff_queues["Teachers"].get_list()])
         finally:
             try:
                 os.remove(path)

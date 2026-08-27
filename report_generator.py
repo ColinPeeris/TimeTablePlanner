@@ -18,25 +18,18 @@ class ReportGenerator:
     def __init__(
         self,
         roster_or_state,
-        teachers=None,
-        temps=None,
+        staff_queues=None,
         filename="teacher_schedule_with_duties.xlsx",
     ):
-        # Accept either a ScheduleState or legacy (roster, teachers, temps)
         if isinstance(roster_or_state, ScheduleState):
             state = roster_or_state
         else:
-            state = ScheduleState(roster_or_state, teachers, temps)
+            state = ScheduleState(roster_or_state, staff_queues or {})
 
         self._roster = state.roster
-        self._teachers = state.teachers
-        self._temps = state.temps
+        self._state = state
         self._filename = filename
-
-        self._people = (
-            self._teachers.get_list() +
-            self._temps.get_list()
-        )
+        self._people = state.get_all_people()
 
     def generate(self):
         duty_roster = self.create_duty_roster()
@@ -337,11 +330,8 @@ class ReportGenerator:
 
         rows = []
 
-        # Teacher list followed by temp list
-        people = (
-            self._teachers.get_list() +
-            self._temps.get_list()
-        )
+        # All staff members across all queues
+        people = self._people
 
         # All days that appear in the roster
         all_days = sorted(self._roster.keys())
