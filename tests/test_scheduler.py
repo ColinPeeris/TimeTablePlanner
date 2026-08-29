@@ -275,13 +275,13 @@ def test_scheduler_get_staff_availability_reads_excel(tmp_path):
     assert len(temps) == 2
     assert len(ch) == 1
 
-    assert teachers[0] == ["Teacher", "Monday", "AM", "Alice"]
-    assert teachers[1] == ["Teacher", "Tuesday", "PM", "Bob"]
+    assert teachers[0] == ["Teacher", "Monday", "AM", "Alice", 1.0]
+    assert teachers[1] == ["Teacher", "Tuesday", "PM", "Bob", 1.0]
 
-    assert temps[0] == ["Temp", "Wednesday", "AM", "Carol"]
-    assert temps[1] == ["Temp", "Thursday", "PM", "Dave"]
+    assert temps[0] == ["Temp", "Wednesday", "AM", "Carol", 1.0]
+    assert temps[1] == ["Temp", "Thursday", "PM", "Dave", 1.0]
 
-    assert ch[0] == ["CH", "Friday", "AM", "Eve"]
+    assert ch[0] == ["CH", "Friday", "AM", "Eve", 1.0]
 
 
 def test_scheduler_get_staff_availability_combines_staff_types_across_sheets(tmp_path):
@@ -311,13 +311,13 @@ def test_scheduler_get_staff_availability_combines_staff_types_across_sheets(tmp
     assert "Temp" in result
 
     assert result["Teacher"] == [
-        ["Teacher", "Monday", "AM", "Alice"],
-        ["Teacher", "Tuesday", "PM", "Bob"],
-        ["Teacher", "Wednesday", "AM", "Carol"],
+        ["Teacher", "Monday", "AM", "Alice", 1.0],
+        ["Teacher", "Tuesday", "PM", "Bob", 1.0],
+        ["Teacher", "Wednesday", "AM", "Carol", 1.0],
     ]
 
     assert result["Temp"] == [
-        ["Temp", "Thursday", "PM", "Dave"],
+        ["Temp", "Thursday", "PM", "Dave", 1.0],
     ]
 
     
@@ -392,17 +392,6 @@ def test_scheduler_get_duties_list_from_excel_normalizes_float_times(tmp_path):
     assert hall_duty[DUTY_END_TIME] == "1700"
     assert hall_duty[DUTY_DURATION] == pytest.approx(9.0)
     assert hall_duty[DUTY_STAFF_PREFERENCE] == "Teacher First"
-
-
-def test_scheduler_write_roster_to_excel_creates_file(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    roster = {"Monday": {"Hall Duty": {"assignees": [Person("Alice")], "start_time": "0900", "end_time": "1000"}}}
-    teacher_queue = Queue()
-    temp_queue = Queue()
-    teacher_queue.add_to_queue("Alice", "Monday", "0900", "1000", 1)
-
-    Scheduler._write_roster_to_excel(roster, {"Teachers": teacher_queue, "Temps": temp_queue})
-    assert (tmp_path / "teacher_schedule_with_duties.xlsx").exists()
 
 
 def test_scheduler_assign_staff_to_duty_fails_when_specialized_staff_is_misallocated(monkeypatch):
@@ -610,6 +599,166 @@ def test_scheduler_preference_invalid_type_raises_value_error():
     err = str(exc_info.value)
     assert "Invalid staff type 'Astronaut'" in err
     assert "Valid staff types are: ['Teachers', 'Temps', 'CH', 'No Preference']" in err
+
+
+def test_scheduler_add_to_queue_reads_expected_capacity():
+    scheduler = object.__new__(Scheduler)
+    queue = Queue()
+
+    staff_list = [
+        ["Monday", "AM", "Alice", 900, 1200, "Teacher", 0.5],
+        ["Monday", "AM", "Bob", 900, 1200, "Teacher", 1.0],
+    ]
+
+    scheduler._add_to_queue(queue, staff_list)
+
+    people = {person.get_name(): person for person in queue.get_list()}
+    assert people["Alice"].get_expected_capacity("Monday_AM") == 0.5
+    assert people["Bob"].get_expected_capacity("Monday_AM") == 1.0
+
+
+def test_scheduler_add_to_queue_defaults_missing_expected_capacity_to_one():
+    scheduler = object.__new__(Scheduler)
+    queue = Queue()
+
+    staff_list = [
+        ["Monday", "AM", "Alice", 900, 1200],
+    ]
+
+    scheduler._add_to_queue(queue, staff_list)
+
+    assert queue.get_list()[0].get_expected_capacity() == 1.0
+
+
+def test_scheduler_add_to_queue_keeps_expected_capacity_per_day():
+    scheduler = object.__new__(Scheduler)
+    queue = Queue()
+
+    staff_list = [
+        ["Monday", "AM", "Ferninda", 900, 1200, "Teacher", 0.7],
+        ["Tuesday", "AM", "Ferninda", 900, 1200, "Teacher", 0.5],
+    ]
+
+    scheduler._add_to_queue(queue, staff_list)
+
+    person = queue.get_list()[0]
+    assert person.get_expected_capacity("Monday_AM") == 0.7
+    assert person.get_expected_capacity("Tuesday_AM") == 0.5
+    assert person.get_expected_capacity() == pytest.approx(0.6)
+
+
+def test_scheduler_parse_expected_capacity_defaults_blank_values():
+    assert Scheduler._parse_expected_capacity(None) == 1.0
+    assert Scheduler._parse_expected_capacity("") == 1.0
+    assert Scheduler._parse_expected_capacity(float("nan")) == 1.0
+    assert Scheduler._parse_expected_capacity("0.5") == 0.5
+
+
+def test_scheduler_get_staff_availability_reads_expected_capacity(tmp_path):
+    file_path = tmp_path / "availability.xlsx"
+
+    with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+        pd.DataFrame(
+            [
+                ["Monday", "AM", "Alice", 900, 1200, "Teacher", 0.5],
+                ["Monday", "AM", "Bob", 900, 1200, "Teacher", 1.0],
+            ],
+            columns=[
+                "Day",
+                "Session",
+                "Name",
+                "Start Time",
+                "End Time",
+                "Staff Type",
+                "Expected Capacity",
+            ],
+        ).to_excel(writer, sheet_name="Staff", index=False)
+
+    result = Scheduler._get_staff_availability(str(file_path))
+
+    assert result["Teacher"][0][-1] == 0.5
+    assert result["Teacher"][1][-1] == 1.0
+
+
+def test_scheduler_assigns_more_work_to_higher_expected_capacity():
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
+    scheduler._lunch_break_min_rest_slots = 0
+
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0900", "1200", 0, expected_capacity=0.5)
+    queue.add_to_queue("Bob", "Monday", "0900", "1200", 0, expected_capacity=1.0)
+
+    for start, end in (("0900", "0930"), ("0930", "1000"), ("1000", "1030")):
+        duty_info = {
+            DUTY_START_TIME: start,
+            DUTY_END_TIME: end,
+            DUTY_ASSIGNEES: [],
+            DUTY_REQUIRED_FUNCTION: None,
+            DUTY_RESTRICTED_FUNCTION: None,
+            DUTY_STAFF_PREFERENCE: None,
+        }
+        result = scheduler._assign_staff_to_duty(
+            "Monday",
+            duty_info,
+            {"Teachers": queue},
+            required_count=1,
+            ideal_case=False,
+        )
+        assert result is True
+
+    people = {person.get_name(): person for person in queue.get_list()}
+    assert people["Alice"].get_hours_worked() == 0.5
+    assert people["Bob"].get_hours_worked() == 1.0
+    assert people["Bob"].get_hours_worked() == 2 * people["Alice"].get_hours_worked()
+
+
+def test_scheduler_optimize_distributes_work_by_expected_capacity():
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._fairness_mode = "week"
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
+    scheduler._lunch_break_min_rest_slots = 0
+    scheduler._duty_roster = DutyRoster()
+    scheduler._duty_roster._add_day("Monday")
+
+    for start, end in (
+        ("0900", "0930"),
+        ("0930", "1000"),
+        ("1000", "1030"),
+        ("1030", "1100"),
+        ("1100", "1130"),
+        ("1130", "1200"),
+    ):
+        scheduler._duty_roster.add_duty(
+            day="Monday",
+            activity=f"Duty {start}",
+            session="AM",
+            start_time=start,
+            end_time=end,
+            min_requirement=1,
+            ideal_case=1,
+            required_function=None,
+            restricted_function=None,
+            staff_preference="No Preference",
+        )
+
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0900", "1200", 0, expected_capacity=0.5)
+    queue.add_to_queue("Bob", "Monday", "0900", "1200", 0, expected_capacity=1.0)
+
+    state = scheduler._optimize_duty_assignment({"Teachers": queue})
+    people = {person.get_name(): person for person in state.get_all_people()}
+
+    assert people["Alice"].get_hours_worked() == 1.0
+    assert people["Bob"].get_hours_worked() == 2.0
+    assert people["Bob"].get_hours_worked() == 2 * people["Alice"].get_hours_worked()
+    assert people["Alice"].get_work_capacity_ratio() == pytest.approx(
+        people["Bob"].get_work_capacity_ratio()
+    )
 
 
 

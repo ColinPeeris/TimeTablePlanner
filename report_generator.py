@@ -343,6 +343,7 @@ class ReportGenerator:
 
             row = {
                 "Person": person.get_name(),
+                "Expected Capacity": person.get_expected_capacity(),
                 "Work To Capacity": round(
                     person.get_work_capacity_ratio(),
                     2,
@@ -357,6 +358,7 @@ class ReportGenerator:
 
                 row[f"{day} Work"] = worked.get(day, 0)
                 row[f"{day} Rest"] = rests.get(day, 0)
+                row[f"{day} Expected Capacity"] = person.get_expected_capacity(day)
 
             rows.append(row)
 
@@ -365,6 +367,7 @@ class ReportGenerator:
         # Put summary columns first
         summary_columns = [
             "Person",
+            "Expected Capacity",
             "Work To Capacity",
             "Hours Worked",
             "Rest Hours",
@@ -376,6 +379,7 @@ class ReportGenerator:
         for day in all_days:
             daily_columns.append(f"{day} Work")
             daily_columns.append(f"{day} Rest")
+            daily_columns.append(f"{day} Expected Capacity")
 
         return df[summary_columns + daily_columns]
 

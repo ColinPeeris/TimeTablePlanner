@@ -20,9 +20,11 @@ class Person:
     are loaded from the central configuration.
     """
 
-    def __init__(self, name: str, staff_type: str = None):
+    def __init__(self, name: str, staff_type: str = None, expected_capacity: float = 1.0):
         self._name = name
         self._staff_type = staff_type
+        self._default_expected_capacity = self._validate_expected_capacity(expected_capacity)
+        self._expected_capacity_by_day = {}
         self._availability_by_hour = {}
         self._days_assigned = []
         self._duties_by_day = {}
@@ -145,29 +147,86 @@ class Person:
         """Set the person's staff type/role."""
         self._staff_type = staff_type
 
+    @staticmethod
+    def _validate_expected_capacity(expected_capacity: float) -> float:
+        """Validate that expected capacity is a positive number."""
+        try:
+            capacity = float(expected_capacity)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Expected capacity must be a positive number, not {expected_capacity!r}."
+            ) from exc
+
+        if capacity <= 0:
+            raise ValueError(
+                f"Expected capacity must be greater than 0, not {capacity}."
+            )
+
+        return capacity
+
+    def get_expected_capacity(self, day: str = None) -> float:
+        """Return expected capacity for a day, or the weekly weighted average."""
+        if day is not None:
+            return self._expected_capacity_by_day.get(day, self._default_expected_capacity)
+
+        total_slots = 0
+        weighted_capacity = 0.0
+        for availability_day, slots in self._availability_by_hour.items():
+            day_slots = slots.count(0) + slots.count(1)
+            if day_slots == 0:
+                continue
+            total_slots += day_slots
+            weighted_capacity += day_slots * self.get_expected_capacity(availability_day)
+
+        if total_slots == 0:
+            return self._default_expected_capacity
+
+        return weighted_capacity / total_slots
+
+    def set_expected_capacity(self, expected_capacity: float, day: str = None) -> None:
+        """Set expected capacity for a specific day, or the default when no day is given."""
+        capacity = self._validate_expected_capacity(expected_capacity)
+        if day is None:
+            self._default_expected_capacity = capacity
+            return
+        self._expected_capacity_by_day[day] = capacity
+
     def get_availability(self, day: str) -> List[int]:
         """Return the availability array for a specific day."""
         return self._availability_by_hour.get(day, [])
 
-    def get_work_capacity_ratio(self) -> float:
+    def get_work_capacity_ratio(self, day: str = None) -> float:
         """
-        Return the ratio of filled work slots to total available
-        school-time slots.
+        Return filled work slots divided by available school-time slots,
+        scaled by expected capacity.
+
+        When `day` is provided, only that day's slots and capacity are used.
+        Otherwise the weekly ratio is filled slots over the sum of each day's
+        available slots multiplied by that day's expected capacity.
         """
+        if day is not None:
+            slots = self._availability_by_hour.get(day, [])
+            filled_slots = slots.count(1)
+            free_slots = slots.count(0)
+            total_slots = filled_slots + free_slots
+            if total_slots == 0:
+                return 0.0
+            return (float(filled_slots) / total_slots) / self.get_expected_capacity(day)
+
         total_filled_slots = 0
-        total_free_slots = 0
+        expected_slots = 0.0
 
-        for day in self._availability_by_hour:
-            slots = self._availability_by_hour[day]
-            total_filled_slots += slots.count(1)
-            total_free_slots += slots.count(0)
+        for availability_day, slots in self._availability_by_hour.items():
+            filled_slots = slots.count(1)
+            free_slots = slots.count(0)
+            day_slots = filled_slots + free_slots
+            total_filled_slots += filled_slots
+            expected_slots += day_slots * self.get_expected_capacity(availability_day)
 
-        total_slots = total_filled_slots + total_free_slots
-
-        if total_slots == 0:
+        if expected_slots == 0:
             return 0.0
 
-        return float(total_filled_slots) / total_slots
+        return float(total_filled_slots) / expected_slots
 
     def get_hours_worked(self) -> float:
         """Return the total number of hours worked."""

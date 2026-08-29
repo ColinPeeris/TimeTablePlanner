@@ -166,3 +166,61 @@ def test_person_add_duty_appends_day():
     person.add_duty("Monday")
 
     assert person._days_assigned == ["Monday"]
+
+
+def test_person_expected_capacity_defaults_to_one():
+    person = Person("Alice")
+
+    assert person.get_expected_capacity() == 1.0
+
+
+def test_person_set_expected_capacity_updates_value():
+    person = Person("Alice")
+    person.set_expected_capacity(0.5)
+
+    assert person.get_expected_capacity() == 0.5
+
+
+def test_person_expected_capacity_rejects_non_positive_values():
+    with pytest.raises(ValueError):
+        Person("Alice", expected_capacity=0)
+
+    person = Person("Alice")
+    with pytest.raises(ValueError):
+        person.set_expected_capacity(-1)
+
+
+def test_person_get_work_capacity_ratio_scales_by_expected_capacity():
+    person = Person("Alice", expected_capacity=0.5)
+
+    person.set_availability("Monday", "0900", "0930", 1)
+    person.set_availability("Monday", "0930", "1100", 0)
+
+    # Fill ratio is 0.25; expected capacity 0.5 doubles the work-to-capacity ratio.
+    assert person.get_work_capacity_ratio() == pytest.approx(0.5)
+
+
+def test_person_expected_capacity_is_stored_per_day():
+    person = Person("Ferninda")
+    person.set_availability("Monday", "0900", "1100", 0)
+    person.set_availability("Tuesday", "0900", "1100", 0)
+    person.set_expected_capacity(0.7, day="Monday")
+    person.set_expected_capacity(0.5, day="Tuesday")
+
+    assert person.get_expected_capacity("Monday") == 0.7
+    assert person.get_expected_capacity("Tuesday") == 0.5
+    assert person.get_expected_capacity() == pytest.approx(0.6)
+
+
+def test_person_get_work_capacity_ratio_uses_the_requested_day():
+    person = Person("Ferninda")
+    person.set_availability("Monday", "0900", "0930", 1)
+    person.set_availability("Monday", "0930", "1000", 0)
+    person.set_availability("Tuesday", "0900", "0930", 1)
+    person.set_availability("Tuesday", "0930", "1000", 0)
+    person.set_expected_capacity(1.0, day="Monday")
+    person.set_expected_capacity(0.5, day="Tuesday")
+
+    assert person.get_work_capacity_ratio("Monday") == pytest.approx(0.5)
+    assert person.get_work_capacity_ratio("Tuesday") == pytest.approx(1.0)
+    assert person.get_work_capacity_ratio() == pytest.approx(2 / 3)

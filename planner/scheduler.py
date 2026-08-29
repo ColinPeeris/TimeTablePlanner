@@ -47,8 +47,7 @@ class Scheduler:
       6. Writes the selected roster and work distribution to `teacher_schedule_with_duties.xlsx`.
 
     This class is intentionally designed as an orchestration layer; most detailed logic lives in the
-    helper methods `_add_to_queue`, `_optimize_duty_assignment`, `_assign_staff_to_duty`, and
-    `_write_roster_to_excel`.
+    helper methods `_add_to_queue`, `_optimize_duty_assignment`, and `_assign_staff_to_duty`.
     """
 
     def __init__(self, fairness_mode: str = None, days_to_schedule: List[str] = None, previous_roster: dict = None):
@@ -159,13 +158,15 @@ class Scheduler:
             start_time = str(Person.normalize_time(row[3])).zfill(4)
             end_time = str(Person.normalize_time(row[4])).zfill(4)
             row_staff_type = str(row[5]).strip() if len(row) > 5 and row[5] is not None and not (isinstance(row[5], float) and pd.isna(row[5])) else staff_type
+            expected_capacity = self._parse_expected_capacity(row[6]) if len(row) > 6 else 1.0
             queue.add_to_queue(
                 staff_member=staff_name,
                 day=day,
                 start_time=start_time,
                 end_time=end_time,
                 status=0,
-                staff_type=row_staff_type or staff_type
+                staff_type=row_staff_type or staff_type,
+                expected_capacity=expected_capacity,
             )
 
     @staticmethod
@@ -333,7 +334,10 @@ class Scheduler:
 
                 daily_stds = []
                 for day_key in days:
-                    values = [p.get_hours_worked_by_day().get(day_key, 0) for p in combined_people]
+                    values = [
+                        p.get_hours_worked_by_day().get(day_key, 0) / p.get_expected_capacity(day_key)
+                        for p in combined_people
+                    ]
                     if not values:
                         daily_stds.append(0.0)
                         continue
@@ -726,222 +730,6 @@ class Scheduler:
         return "\n".join(lines)
 
     @staticmethod
-    def _write_roster_to_excel(roster: dict, finalized_staff_queues: Dict[str, Queue]) -> None:
-        """
-        Write the finalized duty roster and work distribution to an Excel file.
-
-        Args:
-            roster (dict): The selected duty schedule keyed by day.
-            finalized_staff_queues (Dict[str, Queue]): Final staff queues dictionary.
-
-        Output:
-            Creates `teacher_schedule_with_duties.xlsx` with two sheets:
-              - Duty Roster
-              - Work Distribution
-        """
-        teachers_by_day = {}
-        for day in roster:
-            teachers_by_day[day] = []
-            for duty in roster[day]:
-                assignees = roster[day][duty][DUTY_ASSIGNEES]
-                teachers_for_duty = [assignee.get_name() for assignee in assignees] + ["NA"] * (6 - len(assignees))
-                teachers_by_day[day].append((duty, teachers_for_duty))
-        data_for_excel = []
-        for day, duties in teachers_by_day.items():
-            for duty, duty_teachers in duties:
-                data_for_excel.append([day, duty] + duty_teachers)
-
-        people_list = [p for q in finalized_staff_queues.values() for p in q.get_list()]
-
-        people = []
-        number_of_duties_taken = []
-        hours_worked_list = []
-        hours_in_school_list = []
-        for person in people_list:
-            people.append(person.get_name())
-            number_of_duties_taken.append(person.get_work_capacity_ratio())
-            hours_worked_list.append(person.get_hours_worked())
-            hours_in_school_list.append(person.get_hours_in_school())
-
-        work_distribution = pd.DataFrame(
-            {
-                "Person": people,
-                "Work To Capacity": number_of_duties_taken,
-                "Hours Worked": hours_worked_list,
-                "Hours In School": hours_in_school_list,
-            }
-        )
-        df_roster = pd.DataFrame(data_for_excel,
-                                 columns=["Day", "Duty", "Teacher 1", "Teacher 2", "Teacher 3", "Teacher 4",
-                                          "Teacher 5", "Teacher 6"])
-        with pd.ExcelWriter("teacher_schedule_with_duties.xlsx", engine="xlsxwriter") as writer:
-            df_roster.to_excel(writer, sheet_name="Duty Roster", index=False)
-            work_distribution.to_excel(writer, sheet_name="Work Distribution", index=False)
-        print("Data has been written to teacher_schedule_with_duties.xlsx")
-
-    @staticmethod
-    def _write_roster_to_excel_2(
-        roster: dict,
-        finalized_staff_queues: Dict[str, Queue],
-    ) -> None:
-
-        import pandas as pd
-
-        ###############################################################
-        # Build Duty Roster sheet
-        ###############################################################
-
-        roster_rows = []
-
-        for day in sorted(roster.keys()):
-
-            duties = sorted(
-                roster[day].items(),
-                key=lambda x: x[1][DUTY_START_TIME]
-            )
-
-            for duty_id, duty_info in duties:
-
-                teachers = [
-                    p.get_name()
-                    for p in duty_info[DUTY_ASSIGNEES]
-                ]
-
-                teachers += [""] * (6 - len(teachers))
-
-                start = duty_info[DUTY_START_TIME]
-                end = duty_info[DUTY_END_TIME]
-
-                duration = (
-                    Person.time_to_index(end)
-                    - Person.time_to_index(start)
-                ) * 0.5
-
-                roster_rows.append([
-                    day,
-                    start,
-                    end,
-                    duration,
-                    duty_info[DUTY_ACTIVITY],
-                    *teachers
-                ])
-
-        df_roster = pd.DataFrame(
-            roster_rows,
-            columns=[
-                "Day",
-                "Start",
-                "End",
-                "Hours",
-                "Duty",
-                "Teacher 1",
-                "Teacher 2",
-                "Teacher 3",
-                "Teacher 4",
-                "Teacher 5",
-                "Teacher 6",
-            ],
-        )
-
-        ###############################################################
-        # Build Work Distribution sheet
-        ###############################################################
-
-        people = [p for q in finalized_staff_queues.values() for p in q.get_list()]
-
-        all_days = sorted(roster.keys())
-
-        people_rows = []
-
-        for person in people:
-
-            worked = person.get_hours_worked_by_day()
-            rests = person.get_rest_periods_by_day()
-
-            row = {
-                "Person": person.get_name(),
-                "Capacity": round(person.get_work_capacity_ratio(), 2),
-                "Hours Worked": person.get_hours_worked(),
-                "Hours In School": person.get_hours_in_school(),
-            }
-
-            total_rest = 0
-
-            for day in all_days:
-
-                work = worked.get(day, 0)
-                rest = rests.get(day, 0)
-
-                row[f"{day} Work"] = work
-                row[f"{day} Rest"] = rest
-
-                total_rest += rest
-
-            row["Total Rest"] = total_rest
-
-            people_rows.append(row)
-
-        df_summary = pd.DataFrame(people_rows)
-
-        ###############################################################
-        # Write workbook
-        ###############################################################
-
-        with pd.ExcelWriter(
-            "teacher_schedule_with_duties.xlsx",
-            engine="xlsxwriter",
-        ) as writer:
-
-            df_roster.to_excel(
-                writer,
-                sheet_name="Duty Roster",
-                index=False,
-            )
-
-            df_summary.to_excel(
-                writer,
-                sheet_name="Work Distribution",
-                index=False,
-            )
-
-            workbook = writer.book
-
-            header_format = workbook.add_format({
-                "bold": True,
-                "bg_color": "#D9EAD3",
-                "border": 1,
-                "align": "center",
-            })
-
-            centre_format = workbook.add_format({
-                "align": "center",
-            })
-
-            for sheet_name, dataframe in {
-                "Duty Roster": df_roster,
-                "Work Distribution": df_summary,
-            }.items():
-
-                worksheet = writer.sheets[sheet_name]
-
-                worksheet.freeze_panes(1, 0)
-
-                for col_num, value in enumerate(dataframe.columns):
-                    worksheet.write(0, col_num, value, header_format)
-
-                    width = max(
-                        len(str(value)),
-                        dataframe.iloc[:, col_num].astype(str).map(len).max()
-                    ) + 2
-
-                    worksheet.set_column(
-                        col_num,
-                        col_num,
-                        width,
-                        centre_format,
-                    )
-
-    @staticmethod
     def _get_staff_availability(file_name: str) -> Dict[str, List]:
         """
         Load staff availability from an Excel file with any number of sheets.
@@ -967,11 +755,25 @@ class Scheduler:
                     f"Sheet '{sheet_name}' does not contain a 'Staff Type' column."
                 )
 
+            if "Expected Capacity" not in df.columns:
+                df["Expected Capacity"] = 1.0
+
             for staff_type, group in df.groupby("Staff Type"):
                 rows = group.values.tolist()
                 staff_dict.setdefault(staff_type, []).extend(rows)
 
         return staff_dict
+
+    @staticmethod
+    def _parse_expected_capacity(value) -> float:
+        """Parse an expected capacity cell, defaulting blank/NaN values to 1.0."""
+        if value is None:
+            return 1.0
+        if isinstance(value, float) and pd.isna(value):
+            return 1.0
+        if isinstance(value, str) and not value.strip():
+            return 1.0
+        return Person._validate_expected_capacity(value)
 
     def _get_duties_list_from_excel(self, file_name):
         """

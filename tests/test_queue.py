@@ -1,5 +1,6 @@
 from planner.person import Person
 from planner.queue import Queue
+import pytest
 
 
 def test_queue_create_queue_from_names():
@@ -136,3 +137,76 @@ def test_queue_find_std_deviation_computes_correct_value():
 
     expected_std = 0.25
     assert queue.find_std_deviation() == expected_std
+
+
+def test_queue_add_to_queue_sets_expected_capacity():
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0900", "1000", 0, expected_capacity=0.5)
+
+    assert queue.get_list()[0].get_expected_capacity("Monday") == 0.5
+
+
+def test_queue_add_to_queue_updates_expected_capacity_for_existing_person():
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0900", "1000", 0, expected_capacity=1.0)
+    queue.add_to_queue("Alice", "Tuesday", "0900", "1000", 0, expected_capacity=0.5)
+
+    assert len(queue.get_list()) == 1
+    assert queue.get_list()[0].get_expected_capacity("Monday") == 1.0
+    assert queue.get_list()[0].get_expected_capacity("Tuesday") == 0.5
+    assert queue.get_list()[0].get_expected_capacity() == pytest.approx(0.75)
+
+
+def test_queue_select_available_person_prefers_higher_expected_capacity():
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0900", "1200", 0, expected_capacity=0.5)
+    queue.add_to_queue("Bob", "Monday", "0900", "1200", 0, expected_capacity=1.0)
+
+    first = queue.select_available_person("Monday", "0900", "0930")
+    second = queue.select_available_person("Monday", "0930", "1000")
+    third = queue.select_available_person("Monday", "1000", "1030")
+
+    assert first.get_name() == "Alice"
+    assert second.get_name() == "Bob"
+    assert third.get_name() == "Bob"
+
+
+def test_queue_find_std_deviation_accounts_for_expected_capacity():
+    person_a = Person("Alice", expected_capacity=0.5)
+    person_a.set_availability("Monday", "0900", "0930", 1)
+    person_a.set_availability("Monday", "0930", "1000", 0)
+
+    person_b = Person("Bob", expected_capacity=1.0)
+    person_b.set_availability("Monday", "0900", "0930", 1)
+    person_b.set_availability("Monday", "0930", "1000", 0)
+
+    queue = Queue()
+    queue._queue = [person_a, person_b]
+
+    # Alice fill ratio 0.5 / capacity 0.5 = 1.0; Bob fill ratio 0.5 / capacity 1.0 = 0.5.
+    expected_std = 0.25
+    assert queue.find_std_deviation() == expected_std
+
+
+def test_queue_select_available_person_uses_capacity_for_the_assignment_day():
+    queue = Queue()
+    queue.add_to_queue("Alice", "Monday", "0900", "1200", 0, expected_capacity=0.5)
+    queue.add_to_queue("Alice", "Tuesday", "0900", "1200", 0, expected_capacity=1.0)
+    queue.add_to_queue("Bob", "Monday", "0900", "1200", 0, expected_capacity=1.0)
+    queue.add_to_queue("Bob", "Tuesday", "0900", "1200", 0, expected_capacity=0.5)
+
+    monday_first = queue.select_available_person("Monday", "0900", "0930")
+    monday_second = queue.select_available_person("Monday", "0930", "1000")
+    monday_third = queue.select_available_person("Monday", "1000", "1030")
+
+    assert monday_first.get_name() == "Alice"
+    assert monday_second.get_name() == "Bob"
+    assert monday_third.get_name() == "Bob"
+
+    tuesday_first = queue.select_available_person("Tuesday", "0900", "0930")
+    tuesday_second = queue.select_available_person("Tuesday", "0930", "1000")
+    tuesday_third = queue.select_available_person("Tuesday", "1000", "1030")
+
+    assert tuesday_first.get_name() == "Alice"
+    assert tuesday_second.get_name() == "Bob"
+    assert tuesday_third.get_name() == "Alice"
