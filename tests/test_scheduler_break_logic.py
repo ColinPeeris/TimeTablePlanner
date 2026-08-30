@@ -3,6 +3,7 @@ import pytest
 from planner.scheduler import Scheduler
 from planner.staff_attributes import StaffAttributes
 from planner.queue import Queue
+from planner.person import Person
 from planner.utils.constants import (
     DUTY_ASSIGNEES,
     DUTY_START_TIME,
@@ -168,3 +169,66 @@ def test_lunch_rest_preference_overrides_expected_capacity(scheduler_with_lunch_
     assert result is True
     assert len(duty_info[DUTY_ASSIGNEES]) == 1
     assert duty_info[DUTY_ASSIGNEES][0].get_name() == "Alice"
+
+
+def test_would_violate_lunch_rest_ignores_adhoc_partial_lunch_presence():
+    scheduler = object.__new__(Scheduler)
+    scheduler._lunch_break_start = "1130"
+    scheduler._lunch_break_end = "1400"
+    scheduler._lunch_break_min_rest_slots = 2
+
+    adhoc = Person("Adhoc")
+    adhoc.set_availability("Monday", "1200", "1230", 0)
+
+    assert scheduler._is_lunch_window_applicable(adhoc, "Monday") is False
+    assert scheduler._would_violate_lunch_rest(adhoc, "Monday", "1200", "1230") is False
+
+
+def test_would_violate_lunch_rest_applies_when_present_for_full_lunch_window():
+    scheduler = object.__new__(Scheduler)
+    scheduler._lunch_break_start = "1100"
+    scheduler._lunch_break_end = "1300"
+    scheduler._lunch_break_min_rest_slots = 1
+
+    emily = Person("Emily")
+    emily.set_availability("Monday", "1100", "1230", 1)
+    emily.set_availability("Monday", "1230", "1300", 0)
+
+    assert scheduler._is_lunch_window_applicable(emily, "Monday") is True
+    assert scheduler._would_violate_lunch_rest(emily, "Monday", "1230", "1300") is True
+
+
+def test_assign_staff_allows_adhoc_worker_during_lunch():
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "1130"
+    scheduler._lunch_break_end = "1400"
+    scheduler._lunch_break_min_rest_slots = 2
+
+    teacher_queue = Queue()
+    teacher_queue.add_to_queue("Adhoc", "Monday", "1200", "1230", 0)
+
+    duty_info = {
+        DUTY_START_TIME: "1200",
+        DUTY_END_TIME: "1230",
+        DUTY_ASSIGNEES: [],
+    }
+
+    result = scheduler._assign_staff_to_duty(
+        "Monday", duty_info, {"Teachers": teacher_queue}, required_count=1, ideal_case=False
+    )
+
+    assert result is True
+    assert duty_info[DUTY_ASSIGNEES][0].get_name() == "Adhoc"
+
+
+def test_lunch_provider_satisfied_skips_adhoc_partial_lunch_presence():
+    scheduler = object.__new__(Scheduler)
+    scheduler._lunch_break_start = "1130"
+    scheduler._lunch_break_end = "1400"
+    scheduler._lunch_break_min_rest_slots = 2
+
+    queue = Queue()
+    queue.add_to_queue("Adhoc", "Monday", "1200", "1230", 1)
+
+    assert scheduler._lunch_provider_satisfied({"Teachers": queue}, {"Monday": {}}) is True

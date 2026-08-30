@@ -391,12 +391,32 @@ class Scheduler:
                         )
         return True
 
-    @staticmethod
-    def _is_lunch_window_applicable(person, day_key):
+    def _is_lunch_window_applicable(self, person, day_key):
+        """Return True when the person is in school for the entire lunch window.
+
+        Adhoc staff who are only present for part of the lunch period are excluded
+        so they are not required to keep the configured minimum lunch rest.
+        """
         availability = person.get_availability(day_key)
         if not availability:
             return False
-        return any(status in (0, 1) for status in availability)
+
+        lunch_start = getattr(self, "_lunch_break_start", None)
+        lunch_end = getattr(self, "_lunch_break_end", None)
+        if not lunch_start or not lunch_end:
+            return False
+
+        start_index = Person.time_to_index(
+            lunch_start, person._base_start_minutes, person._slot_minutes
+        )
+        end_index = Person.time_to_index(
+            lunch_end, person._base_start_minutes, person._slot_minutes
+        )
+        if start_index < 0 or end_index > len(availability) or start_index >= end_index:
+            return False
+
+        lunch_slots = availability[start_index:end_index]
+        return all(status in (0, 1) for status in lunch_slots)
 
     @staticmethod
     def _count_rest_slots_during_window(person, day_key, start_time, end_time):
@@ -427,6 +447,9 @@ class Scheduler:
         """
         Check whether assigning this duty to the person would cause them to have
         fewer than the required minimum rest slots during the configured lunch window.
+
+        The check only applies when the person is in school for the entire lunch
+        window. Adhoc staff who are present for only part of lunch are excluded.
 
         Args:
             person (Person): The staff candidate.
@@ -473,6 +496,7 @@ class Scheduler:
                 return True
 
         return False
+
     def _assign_staff_to_duty(
         self,
         day: str,
