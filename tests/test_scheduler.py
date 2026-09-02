@@ -55,6 +55,19 @@ def test_scheduler_add_to_queue_normalizes_float_times():
     assert availability[:2] + availability[20:] == [-1] * 6
 
 
+def test_scheduler_add_to_queue_normalizes_excel_date_keys():
+    scheduler = object.__new__(Scheduler)
+    queue = Queue()
+
+    scheduler._add_to_queue(queue, [
+        ["Tuesday", pd.Timestamp("2026-09-15"), "Alice", 1100, 1200],
+    ])
+
+    assert queue.get_list()[0].check_availability(
+        "Tuesday_2026-09-15", "1100", "1200"
+    )
+
+
 def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
     scheduler = object.__new__(Scheduler)
     scheduler._staff_attributes = StaffAttributes()

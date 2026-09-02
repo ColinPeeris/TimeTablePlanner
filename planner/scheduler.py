@@ -153,7 +153,7 @@ class Scheduler:
             staff_type (str, optional): Default staff type for entries in this queue.
         """
         for row in staff_list:
-            day = f"{row[0]}_{str(row[1]).replace(' ', '_')}"
+            day = self._format_day_key(row[0], row[1])
             staff_name = str(row[2]).strip()
             start_time = str(Person.normalize_time(row[3])).zfill(4)
             end_time = str(Person.normalize_time(row[4])).zfill(4)
@@ -168,6 +168,22 @@ class Scheduler:
                 staff_type=row_staff_type or staff_type,
                 expected_capacity=expected_capacity,
             )
+
+    @staticmethod
+    def _format_day_key(day, date) -> str:
+        """Build a stable day key for both Excel dates and legacy sessions."""
+        date_text = str(date).strip()
+        is_iso_date = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}(?: .*)?", date_text))
+        parsed_date = pd.to_datetime(
+            date,
+            dayfirst=not is_iso_date,
+            errors="coerce",
+        )
+        if not pd.isna(parsed_date):
+            date_key = parsed_date.strftime("%Y-%m-%d")
+        else:
+            date_key = str(date).replace(" ", "_")
+        return f"{day}_{date_key}"
 
     @staticmethod
     def _order_queues_by_preference(staff_queues: Dict[str, Queue], preference: Optional[str]) -> List[Queue]:
@@ -839,7 +855,7 @@ class Scheduler:
             dataframe["Restricted Function"],
             dataframe["Staff Preference"]
         ):
-            day_key = f"{day}_{str(date).replace(' ', '_')}"
+            day_key = self._format_day_key(day, date)
 
             normalized_start_time = str(Person.normalize_time(start_time)).zfill(4)
             normalized_end_time = str(Person.normalize_time(end_time)).zfill(4)
