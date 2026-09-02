@@ -339,7 +339,7 @@ def test_scheduler_get_duties_list_from_excel_populates_duty_roster(tmp_path):
     duties = pd.DataFrame(
         {
             "Day": ["Monday"],
-            "Date": ["2026-08-01"],
+            "Date": ["2026-08-03"],
             "Activity": ["Hall Duty"],
             "Session": ["AM"],
             "Start Time": ["0900"],
@@ -358,7 +358,8 @@ def test_scheduler_get_duties_list_from_excel_populates_duty_roster(tmp_path):
     scheduler._get_duties_list_from_excel(str(file_path))
 
     duty_roster = scheduler._duty_roster.get_duty_roster()
-    day_key = "Monday_2026-08-01"
+    day_key = "Monday_2026-08-03"
+
     assert day_key in duty_roster
 
     hall_duty = next((duty for duty in duty_roster[day_key].values() if duty.get("activity") == "Hall Duty"), None)
@@ -375,7 +376,7 @@ def test_scheduler_get_duties_list_from_excel_normalizes_float_times(tmp_path):
     duties = pd.DataFrame(
         {
             "Day": ["Monday"],
-            "Date": ["2026-08-01"],
+            "Date": ["2026-08-03"],
             "Activity": ["Hall Duty"],
             "Session": ["AM"],
             "Start Time": [800.0],
@@ -394,7 +395,8 @@ def test_scheduler_get_duties_list_from_excel_normalizes_float_times(tmp_path):
     scheduler._get_duties_list_from_excel(str(file_path))
 
     duty_roster = scheduler._duty_roster.get_duty_roster()
-    day_key = "Monday_2026-08-01"
+    day_key = "Monday_2026-08-03"
+
     assert day_key in duty_roster
 
     hall_duty = next((duty for duty in duty_roster[day_key].values() if duty.get("activity") == "Hall Duty"), None)
@@ -405,6 +407,32 @@ def test_scheduler_get_duties_list_from_excel_normalizes_float_times(tmp_path):
     assert hall_duty[DUTY_END_TIME] == "1700"
     assert hall_duty[DUTY_DURATION] == pytest.approx(9.0)
     assert hall_duty[DUTY_STAFF_PREFERENCE] == "Teacher First"
+
+
+def test_scheduler_get_duties_list_from_excel_rejects_day_date_mismatch(tmp_path):
+    file_path = tmp_path / "duties.xlsx"
+    duties = pd.DataFrame(
+        {
+            "Day": ["Wednesday"],
+            "Date": ["2026-09-15"],
+            "Activity": ["Montessori Circle"],
+            "Session": ["AM"],
+            "Start Time": ["0900"],
+            "End Time": ["0930"],
+            "Minimum Requirement": [3],
+            "Ideal Case": [3],
+            "Required Function": ["Montessori"],
+            "Restricted Function": [None],
+            "Staff Preference": ["No Preference"],
+        }
+    )
+    duties.to_excel(file_path, index=False)
+
+    scheduler = object.__new__(Scheduler)
+    scheduler._duty_roster = DutyRoster()
+
+    with pytest.raises(ValueError, match="does not match.*expected Tuesday"):
+        scheduler._get_duties_list_from_excel(str(file_path))
 
 
 def test_scheduler_assign_staff_to_duty_fails_when_specialized_staff_is_misallocated(monkeypatch):

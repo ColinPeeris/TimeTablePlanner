@@ -172,18 +172,31 @@ class Scheduler:
     @staticmethod
     def _format_day_key(day, date) -> str:
         """Build a stable day key for both Excel dates and legacy sessions."""
-        date_text = str(date).strip()
-        is_iso_date = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}(?: .*)?", date_text))
-        parsed_date = pd.to_datetime(
-            date,
-            dayfirst=not is_iso_date,
-            errors="coerce",
-        )
+        parsed_date = Scheduler._parse_schedule_date(date)
         if not pd.isna(parsed_date):
             date_key = parsed_date.strftime("%Y-%m-%d")
         else:
             date_key = str(date).replace(" ", "_")
         return f"{day}_{date_key}"
+
+    @staticmethod
+    def _parse_schedule_date(date):
+        date_text = str(date).strip()
+        is_iso_date = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}(?: .*)?", date_text))
+        return pd.to_datetime(date, dayfirst=not is_iso_date, errors="coerce")
+
+    @staticmethod
+    def _validate_day_matches_date(day, date):
+        parsed_date = Scheduler._parse_schedule_date(date)
+        if pd.isna(parsed_date):
+            return
+
+        expected_day = parsed_date.day_name()
+        if str(day).strip().casefold() != expected_day.casefold():
+            raise ValueError(
+                f"Duty day/date mismatch: '{day}' does not match "
+                f"{parsed_date.strftime('%Y-%m-%d')} (expected {expected_day})."
+            )
 
     @staticmethod
     def _order_queues_by_preference(staff_queues: Dict[str, Queue], preference: Optional[str]) -> List[Queue]:
@@ -855,6 +868,7 @@ class Scheduler:
             dataframe["Restricted Function"],
             dataframe["Staff Preference"]
         ):
+            self._validate_day_matches_date(day, date)
             day_key = self._format_day_key(day, date)
 
             normalized_start_time = str(Person.normalize_time(start_time)).zfill(4)
