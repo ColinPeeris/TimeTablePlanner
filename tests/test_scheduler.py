@@ -220,6 +220,128 @@ def test_order_duties_for_assignment_prioritizes_constrained_duties():
     assert ordered_names[-1] == "Generic Duty"
 
 
+def test_scheduler_assigns_explicit_staff_preference_before_no_preference_duties():
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
+
+    assistant_queue = Queue()
+    teacher_queue = Queue()
+    assistant_queue.add_to_queue("Assistant", "Monday", "0900", "1000", 0)
+    for name in ("Teacher 1", "Teacher 2", "Teacher 3", "Teacher 4", "Teacher 5"):
+        teacher_queue.add_to_queue(name, "Monday", "0900", "1000", 0)
+
+    def duty(activity, requirement, preference):
+        return {
+            DUTY_ACTIVITY: activity,
+            DUTY_START_TIME: "0900",
+            DUTY_END_TIME: "1000",
+            DUTY_MIN_REQUIREMENT: requirement,
+            DUTY_IDEAL_CASE: requirement,
+            DUTY_REQUIRED_FUNCTION: None,
+            DUTY_RESTRICTED_FUNCTION: None,
+            DUTY_STAFF_PREFERENCE: preference,
+            DUTY_ASSIGNEES: [],
+        }
+
+    duties = {
+        "activity_1": duty("Activity 1", 1, "No Preference"),
+        "activity_2": duty("Activity 2", 2, "No Preference"),
+        "activity_3": duty("Activity 3", 2, "No Preference"),
+        "activity_4": duty("Activity 4", 1, "Assistant:Teacher"),
+    }
+    staff_queues = {"Assistants": assistant_queue, "Teachers": teacher_queue}
+
+    for _, duty_info in scheduler._order_duties_for_assignment(
+        duties, staff_queues, scheduler._staff_attributes
+    ):
+        assert scheduler._assign_staff_to_duty(
+            "Monday",
+            duty_info,
+            staff_queues,
+            duty_info[DUTY_MIN_REQUIREMENT],
+            ideal_case=False,
+            duty_name=duty_info[DUTY_ACTIVITY],
+        ) is True
+
+    assert [person.get_name() for person in duties["activity_4"][DUTY_ASSIGNEES]] == ["Assistant"]
+    assert all(
+        person.get_name() != "Assistant"
+        for activity in ("activity_1", "activity_2", "activity_3")
+        for person in duties[activity][DUTY_ASSIGNEES]
+    )
+
+
+def test_scheduler_retries_failed_generic_duty_earlier(monkeypatch):
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._fairness_mode = "week"
+    scheduler._lunch_break_start = "0000"
+    scheduler._lunch_break_end = "0000"
+    scheduler._lunch_break_min_rest_slots = 0
+    scheduler._duty_roster = DutyRoster()
+    scheduler._duty_roster._add_day("Monday")
+
+    scheduler._duty_roster.add_duty("Monday", "Short Duty 1", start_time="1030", end_time="1100", min_requirement=2, ideal_case=2, staff_preference="No Preference")
+    scheduler._duty_roster.add_duty("Monday", "Short Duty 2", start_time="1100", end_time="1130", min_requirement=2, ideal_case=2, staff_preference="No Preference")
+    scheduler._duty_roster.add_duty("Monday", "Full Duty", start_time="1030", end_time="1130", min_requirement=1, ideal_case=1, staff_preference="No Preference")
+
+    teacher_queue = Queue()
+    for name in ("Teacher 1", "Teacher 2", "Teacher 3"):
+        teacher_queue.add_to_queue(name, "Monday", "1030", "1130", 0)
+
+    monkeypatch.setattr("planner.queue.shuffle", lambda queue: None)
+    state = scheduler._optimize_duty_assignment({"Teachers": teacher_queue})
+    duties = state.roster["Monday"]
+
+    full_duty = next(duty for duty in duties.values() if duty[DUTY_ACTIVITY] == "Full Duty")
+    assert [person.get_name() for person in full_duty[DUTY_ASSIGNEES]] == ["Teacher 1"]
+
+
+def test_scheduler_does_not_retry_failed_orders_indefinitely(monkeypatch):
+    scheduler = object.__new__(Scheduler)
+    scheduler._staff_attributes = StaffAttributes()
+    scheduler._fairness_mode = "week"
+    scheduler._duty_roster = DutyRoster()
+    scheduler._duty_roster._add_day("Monday")
+
+    for activity in ("Constrained 1", "Constrained 2", "Generic"):
+        scheduler._duty_roster.add_duty(
+            "Monday",
+            activity,
+            start_time="0900",
+            end_time="1000",
+            min_requirement=1,
+            ideal_case=1,
+            required_function=None,
+            restricted_function=None,
+            staff_preference="No Preference",
+        )
+
+    ordered_duties = list(scheduler._duty_roster.get_duty_roster()["Monday"].items())
+    monkeypatch.setattr(
+        scheduler,
+        "_order_duties_for_assignment",
+        lambda duties, staff_queues, staff_attributes: ordered_duties,
+    )
+    assignment_calls = 0
+
+    def fail_generic_duty(day, duty_info, staff_queues, required_count, **kwargs):
+        nonlocal assignment_calls
+        assignment_calls += 1
+        if duty_info[DUTY_ACTIVITY] == "Generic":
+            return "expected assignment failure"
+        return True
+
+    monkeypatch.setattr(scheduler, "_assign_staff_to_duty", fail_generic_duty)
+
+    with pytest.raises(ValueError, match="expected assignment failure"):
+        scheduler._optimize_duty_assignment({"Teachers": Queue()})
+
+    assert assignment_calls == 100 * 6
+
+
 def test_scheduler_get_staff_attributes_from_excel_reads_required_and_restricted(tmp_path):
     file_path = tmp_path / "staff_attributes.xlsx"
     with pd.ExcelWriter(file_path, engine="openpyxl") as writer:

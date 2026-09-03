@@ -257,7 +257,9 @@ class Scheduler:
         """Return duties ordered by assignment priority.
 
         Duties requiring special functions or restrictions are assigned first so
-        skilled staff are preserved for constrained assignments.
+        skilled staff are preserved for constrained assignments. Duties with an
+        explicit staff preference are assigned before duties with no preference
+        so preferred staff are not consumed by generic duties.
 
         This method considers the number of available staff across all queues for each duty,
         prioritizing duties with fewer qualified candidates.
@@ -279,9 +281,17 @@ class Scheduler:
 
             return sum(1 for q in queues_list for p in q.get_list() if person_filter(p))
 
+        def has_staff_preference(duty_info):
+            preference = duty_info.get(DUTY_STAFF_PREFERENCE)
+            if preference is None or (isinstance(preference, float) and pd.isna(preference)):
+                return False
+            return str(preference).strip().lower() not in ("", "no preference", "none", "nan")
+
         return sorted(
             duties.items(),
             key=lambda item: (
+                0 if item[1].get(DUTY_REQUIRED_FUNCTION) or item[1].get(DUTY_RESTRICTED_FUNCTION) else 1,
+                0 if has_staff_preference(item[1]) else 1,
                 count_available_for_duty(item[1]),
                 0 if item[1].get(DUTY_REQUIRED_FUNCTION) is None else -1,
                 0 if item[1].get(DUTY_RESTRICTED_FUNCTION) is None else -1,
@@ -319,16 +329,57 @@ class Scheduler:
                 q.shuffle()
             assignment_successful = True
             for day in duty_roster:
-                for duty_id, duty_info in self._order_duties_for_assignment(duty_roster[day], _staff_queues, self._staff_attributes):
-                    assignment_result = self._assign_staff_to_duty(
-                        day, duty_info, _staff_queues,
-                        duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False,
-                        duties_for_day=duty_roster[day],
-                        duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
-                    if assignment_result is not True:
-                        assignment_successful = False
-                        last_error = assignment_result
+                day_start_queues = copy.deepcopy(_staff_queues)
+                day_start_duties = copy.deepcopy(duty_roster[day])
+                ordered_duties = self._order_duties_for_assignment(
+                    duty_roster[day], _staff_queues, self._staff_attributes
+                )
+
+                assignment_orders = [ordered_duties]
+                failed_index = None
+                # Iterate through each assignment order and attempt to assign staff to duties
+                for assignment_order in assignment_orders:
+                    # Reset the staff queues and duty roster for the current day before attempting assignment
+                    _staff_queues = copy.deepcopy(day_start_queues)
+                    duty_roster[day] = copy.deepcopy(day_start_duties)
+                    assignment_successful = True
+                    # Attempt to assign staff to each duty in the current assignment order
+                    for assignment_index, (duty_id, duty_info) in enumerate(assignment_order):
+                        duty_info = duty_roster[day][duty_id]
+                        assignment_result = self._assign_staff_to_duty(
+                            day, duty_info, _staff_queues,
+                            duty_info[DUTY_MIN_REQUIREMENT], ideal_case=False,
+                            duties_for_day=duty_roster[day],
+                            duty_name=duty_info.get(DUTY_ACTIVITY, "Duty"))
+                        if assignment_result is not True:
+                            # If assignment fails, mark the assignment as unsuccessful and record the index of the failed duty
+                            assignment_successful = False
+                            failed_index = assignment_index
+                            last_error = assignment_result
+                            break
+                    if assignment_successful:
                         break
+
+                    if assignment_order is not ordered_duties:
+                        # If the failed assignment order is not the original ordered duties, 
+                        # skip generating new orders to avoid infinite loops.
+                        continue
+
+                    failed_duty = assignment_order[failed_index][1]
+                    preference = failed_duty.get(DUTY_STAFF_PREFERENCE)
+                    is_generic_duty = not (
+                        failed_duty.get(DUTY_REQUIRED_FUNCTION)
+                        or failed_duty.get(DUTY_RESTRICTED_FUNCTION)
+                    ) and (
+                        preference is None
+                        or str(preference).strip().lower() in ("", "no preference", "none", "nan")
+                    )
+                    if is_generic_duty:
+                        for target_index in range(failed_index):
+                            # Generate a new assignment order by moving the failed duty to a different position in the list
+                            retry_order = list(ordered_duties)
+                            retry_order.insert(target_index, retry_order.pop(failed_index))
+                            assignment_orders.append(retry_order)
 
                 if not assignment_successful:
                     # Stop assigning duties for the current day and move to the next iteration.
