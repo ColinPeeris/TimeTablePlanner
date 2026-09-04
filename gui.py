@@ -204,7 +204,7 @@ def run_template_editor(base_dir):
     """
     layout = [
         [sg.Text("Template case"), sg.Combo(CASE_NAMES, default_value=CASE_NAMES[0], readonly=True, key="T_CASE")],
-        [sg.Button("Load Templates", key="T_LOAD"), sg.Button("Save Template Changes", key="T_SAVE", disabled=True), sg.Text("", key="T_STATUS", size=(65, 1))],
+        [sg.Button("Load Templates", key="T_LOAD"), sg.Button("Validate Template", key="T_VALIDATE", disabled=True), sg.Button("Save Template Changes", key="T_SAVE", disabled=True), sg.Text("", key="T_STATUS", size=(65, 1))],
         [sg.Text("Availability (weekday templates; dates are hidden)")],
         [sg.Table([], headings=TEMPLATE_AVAILABILITY_COLUMNS, key="T_AVAIL", num_rows=7, expand_x=True, expand_y=True, enable_events=True, auto_size_columns=False, col_widths=[14] * len(TEMPLATE_AVAILABILITY_COLUMNS))],
         [sg.Button("Edit Selected Availability", key="T_EDIT_AVAIL", disabled=True), sg.Button("Delete Selected Availability", key="T_DELETE_AVAIL", disabled=True)],
@@ -251,6 +251,7 @@ def run_template_editor(base_dir):
                 window["T_DUTIES"].update(values=_table_rows(duties))
                 window["T_ATTRIBUTES"].update(values=_table_rows(staff_attributes))
                 window["T_CONFIG"].update(values=_table_rows(config_rows))
+                window["T_VALIDATE"].update(disabled=False)
                 window["T_SAVE"].update(disabled=False)
                 window["T_STATUS"].update(value="Loaded templates. Changes are saved only when Save Template Changes is clicked.")
             except Exception as error:
@@ -284,6 +285,25 @@ def run_template_editor(base_dir):
                     _write_template_files(case_dir, availability, duties, staff_attributes, config_rows)
                     window["T_STATUS"].update(value=f"Saved changes to {case_dir}")
             except Exception as error:
+                _show_error(error)
+        elif event == "T_VALIDATE":
+            try:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    _write_template_files(
+                        temp_dir,
+                        availability,
+                        duties,
+                        staff_attributes,
+                        config_rows,
+                    )
+                    Scheduler(
+                        input_dir=temp_dir,
+                        output_dir=temp_dir,
+                    )
+                window["T_STATUS"].update(value="Template validation succeeded")
+                sg.popup("Template validation succeeded", title="Time Table Planner")
+            except Exception as error:
+                window["T_STATUS"].update(value=f"Template validation failed: {error}")
                 _show_error(error)
     window.close()
     return selected_case_name
