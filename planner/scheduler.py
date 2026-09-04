@@ -1,5 +1,7 @@
 import copy
+import os
 import re
+from configparser import ConfigParser
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -50,7 +52,16 @@ class Scheduler:
     helper methods `_add_to_queue`, `_optimize_duty_assignment`, and `_assign_staff_to_duty`.
     """
 
-    def __init__(self, fairness_mode: str = None, days_to_schedule: List[str] = None, previous_roster: dict = None):
+    def __init__(
+        self,
+        fairness_mode: str = None,
+        days_to_schedule: List[str] = None,
+        previous_roster: dict = None,
+        input_dir: str = ".",
+        output_dir: str = ".",
+        selected_dates: Optional[List] = None,
+        config_file: str = None,
+    ):
         """
         Initialize the Scheduler and execute the duty planning workflow.
 
@@ -67,9 +78,18 @@ class Scheduler:
         if days_to_schedule is not None and previous_roster is None:
             raise ValueError("If days_to_schedule is provided, previous_roster must also be provided.")
 
+        self._input_dir = os.path.abspath(input_dir)
+        self._output_dir = os.path.abspath(output_dir)
+        os.makedirs(self._output_dir, exist_ok=True)
+        self._selected_dates = {
+            self._parse_schedule_date(value).strftime("%Y-%m-%d")
+            for value in (selected_dates or [])
+            if not pd.isna(self._parse_schedule_date(value))
+        }
+
         self._staff_attributes = StaffAttributes()
         self._get_staff_attributes_from_excel(
-            "StaffAttributes.xlsx"
+            self._input_path("StaffAttributes.xlsx")
         )
 
         # Fairness mode controls how fairness is evaluated during optimization.
@@ -77,19 +97,24 @@ class Scheduler:
         #  - 'week'    : original behaviour, minimize weekly stddev (teachers+temps)
         #  - 'day_sum' : minimize sum of daily stddevs across the week
         #  - 'day_max' : minimize the worst-day stddev (minimax)
+        runtime_config = self._read_runtime_config(config_file)
         if fairness_mode is None:
-            fairness_mode = FAIRNESS_MODE
+            fairness_mode = runtime_config["fairness_mode"]
         if fairness_mode not in VALID_FAIRNESS_MODES:
             raise ValueError(f"Unknown fairness mode: {fairness_mode}")
         self._fairness_mode = fairness_mode
 
-        self._lunch_break_start = LUNCH_BREAK_START
-        self._lunch_break_end = LUNCH_BREAK_END
-        self._lunch_break_min_rest_slots = LUNCH_BREAK_MIN_REST_SLOTS
+        self._lunch_break_start = runtime_config["lunch_start"]
+        self._lunch_break_end = runtime_config["lunch_end"]
+        self._lunch_break_min_rest_slots = runtime_config["lunch_min_rest_slots"]
 
-        all_staff_availability = self._get_staff_availability("AvailabilityList.xlsx")
+        all_staff_availability = self._get_staff_availability(
+            self._input_path("AvailabilityList.xlsx"), self._selected_dates
+        )
         self._duty_roster = DutyRoster()
-        self._get_duties_list_from_excel("DutiesBreakdown.xlsx")
+        self._get_duties_list_from_excel(
+            self._input_path("DutiesBreakdown.xlsx"), self._selected_dates
+        )
 
         staff_queues = {}
         for staff_type, staff_list in all_staff_availability.items():
@@ -106,12 +131,35 @@ class Scheduler:
             )
 
         # Persist state companion file
-        excel_filename = "teacher_schedule_with_duties.xlsx"
+        excel_filename = os.path.join(self._output_dir, "teacher_schedule_with_duties.xlsx")
         state_filename = excel_filename.replace('.xlsx', '.state')
         StateSerializer.save(schedule_state, state_filename)
 
         # Generate human-readable workbook (presentation only)
         ReportGenerator(schedule_state, filename=excel_filename).generate()
+
+    def _input_path(self, file_name: str) -> str:
+        return os.path.join(self._input_dir, file_name)
+
+    @staticmethod
+    def _read_runtime_config(config_file):
+        values = {
+            "fairness_mode": FAIRNESS_MODE,
+            "lunch_start": LUNCH_BREAK_START,
+            "lunch_end": LUNCH_BREAK_END,
+            "lunch_min_rest_slots": LUNCH_BREAK_MIN_REST_SLOTS,
+        }
+        if not config_file or not os.path.isfile(config_file):
+            return values
+        config = ConfigParser()
+        config.read(config_file)
+        values["fairness_mode"] = config.get("fairness", "mode", fallback=values["fairness_mode"]).strip()
+        values["lunch_start"] = config.get("lunch", "start", fallback=values["lunch_start"]).strip().zfill(4)
+        values["lunch_end"] = config.get("lunch", "end", fallback=values["lunch_end"]).strip().zfill(4)
+        values["lunch_min_rest_slots"] = config.getint(
+            "lunch", "min_rest_slots", fallback=values["lunch_min_rest_slots"]
+        )
+        return values
 
     def _get_staff_attributes_from_excel(self, file_name):
         """Load staff required and restricted functions from Excel into StaffAttributes.
@@ -176,7 +224,10 @@ class Scheduler:
         if not pd.isna(parsed_date):
             date_key = parsed_date.strftime("%Y-%m-%d")
         else:
-            date_key = str(date).replace(" ", "_")
+            date_text = str(date).strip()
+            if not date_text or date_text.casefold() in {"nan", "nat", "none"}:
+                return str(day).strip()
+            date_key = date_text.replace(" ", "_")
         return f"{day}_{date_key}"
 
     @staticmethod
@@ -834,7 +885,7 @@ class Scheduler:
         return "\n".join(lines)
 
     @staticmethod
-    def _get_staff_availability(file_name: str) -> Dict[str, List]:
+    def _get_staff_availability(file_name: str, selected_dates=None) -> Dict[str, List]:
         """
         Load staff availability from an Excel file with any number of sheets.
 
@@ -849,22 +900,32 @@ class Scheduler:
         """
         staff_dict: Dict[str, List] = {}
 
-        excel_file = pd.ExcelFile(file_name)
+        with pd.ExcelFile(file_name) as excel_file:
+            for sheet_name in excel_file.sheet_names:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name)
 
-        for sheet_name in excel_file.sheet_names:
-            df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                if "Staff Type" not in df.columns:
+                    raise ValueError(
+                        f"Sheet '{sheet_name}' does not contain a 'Staff Type' column."
+                    )
 
-            if "Staff Type" not in df.columns:
-                raise ValueError(
-                    f"Sheet '{sheet_name}' does not contain a 'Staff Type' column."
-                )
+                if "Expected Capacity" not in df.columns:
+                    df["Expected Capacity"] = 1.0
+                if "Date" not in df.columns:
+                    df.insert(1, "Date", None)
 
-            if "Expected Capacity" not in df.columns:
-                df["Expected Capacity"] = 1.0
-
-            for staff_type, group in df.groupby("Staff Type"):
-                rows = group.values.tolist()
-                staff_dict.setdefault(staff_type, []).extend(rows)
+                for staff_type, group in df.groupby("Staff Type"):
+                    # Keep known staff types even when the selected dates have
+                    # no rows for that type, so valid preferences still parse.
+                    staff_dict.setdefault(staff_type, [])
+                    if selected_dates:
+                        date_keys = group["Date"].map(
+                            lambda value: Scheduler._parse_schedule_date(value)
+                        ).map(lambda value: "" if pd.isna(value) else value.strftime("%Y-%m-%d"))
+                        group = group[date_keys.isin(selected_dates)]
+                    rows = group.values.tolist()
+                    if rows:
+                        staff_dict.setdefault(staff_type, []).extend(rows)
 
         return staff_dict
 
@@ -879,7 +940,7 @@ class Scheduler:
             return 1.0
         return Person._validate_expected_capacity(value)
 
-    def _get_duties_list_from_excel(self, file_name):
+    def _get_duties_list_from_excel(self, file_name, selected_dates=None):
         """
         Load duty definitions from an Excel file and add them to the roster.
 
@@ -891,6 +952,13 @@ class Scheduler:
             Minimum Requirement, and Ideal Case.
         """
         dataframe = pd.read_excel(file_name)
+        if "Date" not in dataframe.columns:
+            dataframe.insert(1, "Date", None)
+        if selected_dates:
+            date_keys = dataframe["Date"].map(
+                lambda value: self._parse_schedule_date(value)
+            ).map(lambda value: "" if pd.isna(value) else value.strftime("%Y-%m-%d"))
+            dataframe = dataframe[date_keys.isin(selected_dates)]
         class_col = dataframe["Class"] if "Class" in dataframe.columns else [""] * len(dataframe)
         for (
             day,
