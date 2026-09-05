@@ -89,6 +89,20 @@ def _table_rows(dataframe: pd.DataFrame):
     return dataframe.fillna("").astype(str).values.tolist()
 
 
+def _insert_row_below(dataframe: pd.DataFrame, index: int, copied_columns=()):
+    """Insert a blank row below an index and optionally copy selected columns."""
+    new_row = {column: "" for column in dataframe.columns}
+    if index is not None:
+        for column in copied_columns:
+            if column in dataframe.columns:
+                new_row[column] = dataframe.iloc[index][column]
+    inserted = pd.DataFrame([new_row], columns=dataframe.columns).astype(object)
+    return pd.concat(
+        [dataframe.iloc[: index + 1], inserted, dataframe.iloc[index + 1 :]],
+        ignore_index=True,
+    )
+
+
 def _template_dataframe(dataframe: pd.DataFrame, columns) -> pd.DataFrame:
     """Prepare a weekday-template dataframe for display in the template editor."""
     ordered_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
@@ -207,16 +221,16 @@ def run_template_editor(base_dir):
         [sg.Button("Load Templates", key="T_LOAD"), sg.Button("Validate Template", key="T_VALIDATE", disabled=True), sg.Button("Save Template Changes", key="T_SAVE", disabled=True), sg.Text("", key="T_STATUS", size=(65, 1))],
         [sg.Text("Availability (weekday templates; dates are hidden)")],
         [sg.Table([], headings=TEMPLATE_AVAILABILITY_COLUMNS, key="T_AVAIL", num_rows=7, expand_x=True, expand_y=True, enable_events=True, auto_size_columns=False, col_widths=[14] * len(TEMPLATE_AVAILABILITY_COLUMNS))],
-        [sg.Button("Edit Selected Availability", key="T_EDIT_AVAIL", disabled=True), sg.Button("Delete Selected Availability", key="T_DELETE_AVAIL", disabled=True)],
+        [sg.Button("Edit Selected Availability", key="T_EDIT_AVAIL", disabled=True), sg.Button("Delete Selected Availability", key="T_DELETE_AVAIL", disabled=True), sg.Button("Add Row Below", key="T_ADD_AVAIL", disabled=True)],
         [sg.Text("Duties (weekday templates; dates are hidden)")],
         [sg.Table([], headings=TEMPLATE_DUTY_COLUMNS, key="T_DUTIES", num_rows=7, expand_x=True, expand_y=True, enable_events=True, auto_size_columns=False, col_widths=[14] * len(TEMPLATE_DUTY_COLUMNS))],
-        [sg.Button("Edit Selected Duty", key="T_EDIT_DUTY", disabled=True), sg.Button("Delete Selected Duty", key="T_DELETE_DUTY", disabled=True)],
+        [sg.Button("Edit Selected Duty", key="T_EDIT_DUTY", disabled=True), sg.Button("Delete Selected Duty", key="T_DELETE_DUTY", disabled=True), sg.Button("Add Row Below", key="T_ADD_DUTY", disabled=True)],
         [sg.Text("Staff Attributes")],
         [sg.Table([], headings=STAFF_ATTRIBUTE_COLUMNS, key="T_ATTRIBUTES", num_rows=6, expand_x=True, expand_y=True, enable_events=True, auto_size_columns=False, col_widths=[20, 20, 30])],
-        [sg.Button("Edit Selected Staff Attribute", key="T_EDIT_ATTRIBUTE", disabled=True), sg.Button("Delete Selected Staff Attribute", key="T_DELETE_ATTRIBUTE", disabled=True)],
+        [sg.Button("Edit Selected Staff Attribute", key="T_EDIT_ATTRIBUTE", disabled=True), sg.Button("Delete Selected Staff Attribute", key="T_DELETE_ATTRIBUTE", disabled=True), sg.Button("Add Row Below", key="T_ADD_ATTRIBUTE", disabled=True)],
         [sg.Text("config.ini")],
         [sg.Table([], headings=("Section", "Key", "Value"), key="T_CONFIG", num_rows=6, expand_x=True, expand_y=True, enable_events=True, auto_size_columns=False, col_widths=[18, 24, 45])],
-        [sg.Button("Edit Selected Config", key="T_EDIT_CONFIG", disabled=True), sg.Button("Delete Selected Config", key="T_DELETE_CONFIG", disabled=True)],
+        [sg.Button("Edit Selected Config", key="T_EDIT_CONFIG", disabled=True), sg.Button("Delete Selected Config", key="T_DELETE_CONFIG", disabled=True), sg.Button("Add Row Below", key="T_ADD_CONFIG", disabled=True)],
     ]
     window = sg.Window("Time Table Planner - Template Editor", layout, resizable=True, finalize=True)
     availability = duties = staff_attributes = config_rows = None
@@ -230,6 +244,7 @@ def run_template_editor(base_dir):
         suffix = {"T_AVAIL": "AVAIL", "T_DUTIES": "DUTY", "T_ATTRIBUTES": "ATTRIBUTE", "T_CONFIG": "CONFIG"}[table_key]
         window[f"T_EDIT_{suffix}"].update(disabled=selected[table_key] is None)
         window[f"T_DELETE_{suffix}"].update(disabled=selected[table_key] is None)
+        window[f"T_ADD_{suffix}"].update(disabled=selected[table_key] is None)
 
     while True:
         event, values = window.read()
@@ -258,6 +273,33 @@ def run_template_editor(base_dir):
                 _show_error(error)
         elif event in selected:
             select_row(event, values)
+        elif event in ("T_ADD_AVAIL", "T_ADD_DUTY", "T_ADD_ATTRIBUTE", "T_ADD_CONFIG"):
+            table_key = {
+                "T_ADD_AVAIL": "T_AVAIL",
+                "T_ADD_DUTY": "T_DUTIES",
+                "T_ADD_ATTRIBUTE": "T_ATTRIBUTES",
+                "T_ADD_CONFIG": "T_CONFIG",
+            }[event]
+            dataframes = {"T_AVAIL": availability, "T_DUTIES": duties, "T_ATTRIBUTES": staff_attributes, "T_CONFIG": config_rows}
+            dataframe = dataframes[table_key]
+            index = selected[table_key]
+            if dataframe is not None and index is not None:
+                copied_columns = ("Day",) if table_key in ("T_AVAIL", "T_DUTIES") else ()
+                updated = _insert_row_below(dataframe, index, copied_columns)
+                if table_key == "T_AVAIL":
+                    availability = updated
+                elif table_key == "T_DUTIES":
+                    duties = updated
+                elif table_key == "T_ATTRIBUTES":
+                    staff_attributes = updated
+                else:
+                    config_rows = updated
+                selected[table_key] = index + 1
+                window[table_key].update(values=_table_rows(updated), select_rows=[index + 1])
+                suffix = {"T_AVAIL": "AVAIL", "T_DUTIES": "DUTY", "T_ATTRIBUTES": "ATTRIBUTE", "T_CONFIG": "CONFIG"}[table_key]
+                window[f"T_EDIT_{suffix}"].update(disabled=False)
+                window[f"T_DELETE_{suffix}"].update(disabled=False)
+                window[f"T_ADD_{suffix}"].update(disabled=False)
         elif event.startswith("T_EDIT_"):
             table_key = {"T_EDIT_AVAIL": "T_AVAIL", "T_EDIT_DUTY": "T_DUTIES", "T_EDIT_ATTRIBUTE": "T_ATTRIBUTES", "T_EDIT_CONFIG": "T_CONFIG"}[event]
             dataframes = {"T_AVAIL": availability, "T_DUTIES": duties, "T_ATTRIBUTES": staff_attributes, "T_CONFIG": config_rows}
@@ -279,6 +321,8 @@ def run_template_editor(base_dir):
                 selected[table_key] = None
                 window[table_key].update(values=_table_rows(dataframe))
                 window[event].update(disabled=True)
+                suffix = {"T_AVAIL": "AVAIL", "T_DUTIES": "DUTY", "T_ATTRIBUTES": "ATTRIBUTE", "T_CONFIG": "CONFIG"}[table_key]
+                window[f"T_ADD_{suffix}"].update(disabled=True)
         elif event == "T_SAVE":
             try:
                 if sg.popup_yes_no("Save these changes into the selected case input files?") == "Yes":
@@ -362,13 +406,13 @@ def run_gui(base_dir=None):
         [sg.Button("Load Data", key="LOAD"), sg.Button("Generate Schedule", key="GENERATE", disabled=True), sg.Button("Open Template Editor", key="TEMPLATE_EDITOR"), sg.Text("", key="STATUS", size=(55, 1))],
         [sg.Text("Availability")],
         [sg.Table([], headings=AVAILABILITY_COLUMNS, key="AVAILABILITY", num_rows=8, expand_x=True, expand_y=True, enable_events=True, auto_size_columns=False, col_widths=[14] * len(AVAILABILITY_COLUMNS))],
-        [sg.Button("Edit Selected Availability", key="EDIT_AVAIL", disabled=True), sg.Button("Delete Selected Availability", key="DELETE_AVAIL", disabled=True)],
+        [sg.Button("Edit Selected Availability", key="EDIT_AVAIL", disabled=True), sg.Button("Delete Selected Availability", key="DELETE_AVAIL", disabled=True), sg.Button("Add Row Below", key="ADD_AVAIL", disabled=True)],
         [sg.Text("Duties")],
         [sg.Table([], headings=DUTY_COLUMNS, key="DUTIES", num_rows=8, expand_x=True, expand_y=True, enable_events=True, auto_size_columns=False, col_widths=[14] * len(DUTY_COLUMNS))],
-        [sg.Button("Edit Selected Duty", key="EDIT_DUTY", disabled=True), sg.Button("Delete Selected Duty", key="DELETE_DUTY", disabled=True)],
+        [sg.Button("Edit Selected Duty", key="EDIT_DUTY", disabled=True), sg.Button("Delete Selected Duty", key="DELETE_DUTY", disabled=True), sg.Button("Add Row Below", key="ADD_DUTY", disabled=True)],
         [sg.Text("Staff Attributes")],
         [sg.Table([], headings=STAFF_ATTRIBUTE_COLUMNS, key="STAFF_ATTRIBUTES", num_rows=8, expand_x=True, expand_y=True, enable_events=True, auto_size_columns=False, col_widths=[20, 20, 30])],
-        [sg.Button("Edit Selected Staff Attribute", key="EDIT_ATTRIBUTE", disabled=True), sg.Button("Delete Selected Staff Attribute", key="DELETE_ATTRIBUTE", disabled=True)],
+        [sg.Button("Edit Selected Staff Attribute", key="EDIT_ATTRIBUTE", disabled=True), sg.Button("Delete Selected Staff Attribute", key="DELETE_ATTRIBUTE", disabled=True), sg.Button("Add Row Below", key="ADD_ATTRIBUTE", disabled=True)],
     ]
     window = sg.Window("Time Table Planner", layout, resizable=True, finalize=True)
     _set_runtime_config_controls(window, _case_path(base_dir, CASE_NAMES[0]))
@@ -435,14 +479,42 @@ def run_gui(base_dir=None):
             selected_availability = values["AVAILABILITY"][0] if values["AVAILABILITY"] else None
             window["EDIT_AVAIL"].update(disabled=selected_availability is None)
             window["DELETE_AVAIL"].update(disabled=selected_availability is None)
+            window["ADD_AVAIL"].update(disabled=selected_availability is None)
         elif event == "DUTIES":
             selected_duty = values["DUTIES"][0] if values["DUTIES"] else None
             window["EDIT_DUTY"].update(disabled=selected_duty is None)
             window["DELETE_DUTY"].update(disabled=selected_duty is None)
+            window["ADD_DUTY"].update(disabled=selected_duty is None)
         elif event == "STAFF_ATTRIBUTES":
             selected_attribute = values["STAFF_ATTRIBUTES"][0] if values["STAFF_ATTRIBUTES"] else None
             window["EDIT_ATTRIBUTE"].update(disabled=selected_attribute is None)
             window["DELETE_ATTRIBUTE"].update(disabled=selected_attribute is None)
+            window["ADD_ATTRIBUTE"].update(disabled=selected_attribute is None)
+        elif event in ("ADD_AVAIL", "ADD_DUTY", "ADD_ATTRIBUTE"):
+            if event == "ADD_AVAIL":
+                dataframe, index, key, copied_columns = availability, selected_availability, "AVAILABILITY", ("Day", "Date")
+            elif event == "ADD_DUTY":
+                dataframe, index, key, copied_columns = duties, selected_duty, "DUTIES", ("Day", "Date")
+            else:
+                dataframe, index, key, copied_columns = staff_attributes, selected_attribute, "STAFF_ATTRIBUTES", ()
+            if dataframe is not None and index is not None:
+                updated = _insert_row_below(dataframe, index, copied_columns)
+                if key == "AVAILABILITY":
+                    availability = updated
+                    selected_availability = index + 1
+                    suffix = "AVAIL"
+                elif key == "DUTIES":
+                    duties = updated
+                    selected_duty = index + 1
+                    suffix = "DUTY"
+                else:
+                    staff_attributes = updated
+                    selected_attribute = index + 1
+                    suffix = "ATTRIBUTE"
+                window[key].update(values=_table_rows(updated), select_rows=[index + 1])
+                window[f"EDIT_{suffix}"].update(disabled=False)
+                window[f"DELETE_{suffix}"].update(disabled=False)
+                window[f"ADD_{suffix}"].update(disabled=False)
         elif event in ("EDIT_AVAIL", "EDIT_DUTY"):
             dataframe = availability if event == "EDIT_AVAIL" else duties
             index = selected_availability if event == "EDIT_AVAIL" else selected_duty
@@ -476,12 +548,15 @@ def run_gui(base_dir=None):
                 if key == "AVAILABILITY":
                     selected_availability = None
                     window["EDIT_AVAIL"].update(disabled=True)
+                    window["ADD_AVAIL"].update(disabled=True)
                 elif key == "DUTIES":
                     selected_duty = None
                     window["EDIT_DUTY"].update(disabled=True)
+                    window["ADD_DUTY"].update(disabled=True)
                 else:
                     selected_attribute = None
                     window["EDIT_ATTRIBUTE"].update(disabled=True)
+                    window["ADD_ATTRIBUTE"].update(disabled=True)
                 window[event].update(disabled=True)
         elif event == "GENERATE":
             try:
