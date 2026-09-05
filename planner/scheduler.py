@@ -959,6 +959,15 @@ class Scheduler:
                 lambda value: self._parse_schedule_date(value)
             ).map(lambda value: "" if pd.isna(value) else value.strftime("%Y-%m-%d"))
             dataframe = dataframe[date_keys.isin(selected_dates)]
+
+        def parse_requirement(value):
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                return 0
+            value = str(value).strip()
+            if not value:
+                return 0
+            return int(float(value))
+
         class_col = dataframe["Class"] if "Class" in dataframe.columns else [""] * len(dataframe)
         for (
             day,
@@ -999,9 +1008,9 @@ class Scheduler:
                 session=session,
                 start_time=normalized_start_time,
                 end_time=normalized_end_time,
-                min_requirement=min_requirement,
-                ideal_case=ideal_case,
-                required_function=None if pd.isna(required_function) else required_function,
-                restricted_function=None if pd.isna(restricted_function) else restricted_function,
-                staff_preference=staff_preference
+                min_requirement=parse_requirement(min_requirement),
+                ideal_case=parse_requirement(ideal_case),
+                required_function=None if pd.isna(required_function) else str(required_function).strip(),
+                restricted_function=None if pd.isna(restricted_function) else str(restricted_function).strip(),
+                staff_preference=None if pd.isna(staff_preference) else str(staff_preference).strip(),
             )

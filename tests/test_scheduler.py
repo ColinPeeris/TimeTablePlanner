@@ -68,6 +68,52 @@ def test_scheduler_add_to_queue_normalizes_excel_date_keys():
     )
 
 
+def test_scheduler_duty_loader_normalizes_gui_edited_values(tmp_path):
+    file_path = tmp_path / "duties.xlsx"
+    pd.DataFrame(
+        [[
+            "Monday",
+            "2026-09-14",
+            "Edited Duty",
+            "Class 1",
+            "AM",
+            "0900",
+            "1000",
+            "2",
+            "3",
+            " First Aid ",
+            " No Bus ",
+            " Teacher First ",
+        ]],
+        columns=[
+            "Day",
+            "Date",
+            "Activity",
+            "Class",
+            "Session",
+            "Start Time",
+            "End Time",
+            "Minimum Requirement",
+            "Ideal Case",
+            "Required Function",
+            "Restricted Function",
+            "Staff Preference",
+        ],
+    ).to_excel(file_path, index=False)
+
+    scheduler = object.__new__(Scheduler)
+    scheduler._duty_roster = DutyRoster()
+    scheduler._get_duties_list_from_excel(str(file_path), {"2026-09-14"})
+
+    duty = next(iter(scheduler._duty_roster.get_duty_roster().values()))
+    duty = next(iter(duty.values()))
+    assert duty[DUTY_MIN_REQUIREMENT] == 2
+    assert duty[DUTY_IDEAL_CASE] == 3
+    assert duty[DUTY_REQUIRED_FUNCTION] == "First Aid"
+    assert duty[DUTY_RESTRICTED_FUNCTION] == "No Bus"
+    assert duty[DUTY_STAFF_PREFERENCE] == "Teacher First"
+
+
 def test_scheduler_assign_staff_to_duty_uses_teacher_before_temp():
     scheduler = object.__new__(Scheduler)
     scheduler._staff_attributes = StaffAttributes()
@@ -410,13 +456,13 @@ def test_scheduler_get_staff_availability_reads_excel(tmp_path):
     assert len(temps) == 2
     assert len(ch) == 1
 
-    assert teachers[0] == ["Teacher", "Monday", "AM", "Alice", 1.0]
-    assert teachers[1] == ["Teacher", "Tuesday", "PM", "Bob", 1.0]
+    assert teachers[0] == ["Teacher", None, "Monday", "AM", "Alice", 1.0]
+    assert teachers[1] == ["Teacher", None, "Tuesday", "PM", "Bob", 1.0]
 
-    assert temps[0] == ["Temp", "Wednesday", "AM", "Carol", 1.0]
-    assert temps[1] == ["Temp", "Thursday", "PM", "Dave", 1.0]
+    assert temps[0] == ["Temp", None, "Wednesday", "AM", "Carol", 1.0]
+    assert temps[1] == ["Temp", None, "Thursday", "PM", "Dave", 1.0]
 
-    assert ch[0] == ["CH", "Friday", "AM", "Eve", 1.0]
+    assert ch[0] == ["CH", None, "Friday", "AM", "Eve", 1.0]
 
 
 def test_scheduler_get_staff_availability_combines_staff_types_across_sheets(tmp_path):
@@ -446,13 +492,13 @@ def test_scheduler_get_staff_availability_combines_staff_types_across_sheets(tmp
     assert "Temp" in result
 
     assert result["Teacher"] == [
-        ["Teacher", "Monday", "AM", "Alice", 1.0],
-        ["Teacher", "Tuesday", "PM", "Bob", 1.0],
-        ["Teacher", "Wednesday", "AM", "Carol", 1.0],
+        ["Teacher", None, "Monday", "AM", "Alice", 1.0],
+        ["Teacher", None, "Tuesday", "PM", "Bob", 1.0],
+        ["Teacher", None, "Wednesday", "AM", "Carol", 1.0],
     ]
 
     assert result["Temp"] == [
-        ["Temp", "Thursday", "PM", "Dave", 1.0],
+        ["Temp", None, "Thursday", "PM", "Dave", 1.0],
     ]
 
     
