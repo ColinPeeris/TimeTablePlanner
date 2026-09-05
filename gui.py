@@ -343,6 +343,7 @@ def run_template_editor(base_dir):
                     Scheduler(
                         input_dir=temp_dir,
                         output_dir=temp_dir,
+                        config_file=os.path.join(temp_dir, "config.ini"),
                     )
                 window["T_STATUS"].update(value="Template validation succeeded")
                 sg.popup("Template validation succeeded", title="Time Table Planner")
